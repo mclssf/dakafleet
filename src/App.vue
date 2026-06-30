@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import {
   AuditOutlined,
-  BarChartOutlined,
   CarOutlined,
   CheckOutlined,
   CloseOutlined,
@@ -13,7 +12,6 @@ import {
   MessageOutlined,
   ProjectOutlined,
   RightOutlined,
-  RobotOutlined,
   RotateRightOutlined,
   SearchOutlined,
   TableOutlined,
@@ -42,7 +40,7 @@ const agentMessages = ref<AgentMessage[]>([...initialAgentMessages]);
 const weighRows = ref<WeighBill[]>(weighBills.map((item) => ({ ...item, anomalies: [...item.anomalies] })));
 const expenseRows = ref<Expense[]>(reimbursements.map((item) => ({ ...item, anomalies: [...item.anomalies], images: [...item.images] })));
 const bulkExpenseRows = ref<Expense[]>(buildBulkExpenseRows());
-const reviewWeighIndex = ref(Math.max(0, weighBills.findIndex((item) => item.auditStatus === '待审核')));
+const reviewWeighPairIndex = ref(0);
 const reviewExpenseIndex = ref(Math.max(0, reimbursements.findIndex((item) => item.auditStatus === '待审核')));
 const activeFieldKey = ref('');
 const activeExpenseFieldKey = ref('');
@@ -52,17 +50,56 @@ const expenseZoom = ref(1);
 const expenseRotation = ref(0);
 const expenseImageIndex = ref(0);
 const weighKeyword = ref('');
+const weighRouteFilter = ref('全部线路');
 const expenseStatusFilter = ref<string>('全部');
 const expenseKeyword = ref('');
 const projectMenuExpanded = ref(true);
+const agentRightPanelVisible = ref(true);
+const baseValuesModalVisible = ref(false);
+const dashboardTrendProjectId = ref(projects[0].id);
 const todayDate = '2026-06-30';
 
-const weighDefaults = {
+interface WeighBaseValues {
+  taxableUnitPrice: number;
+  cargoInsurance: number;
+  driverSalary: number;
+  taxRate: number;
+}
+
+interface BaseValuesDraft {
+  taxableUnitPrice: number;
+  cargoInsurance: number;
+  driverSalary: number;
+  taxRatePercent: number;
+}
+
+const defaultBaseValues: WeighBaseValues = {
   taxableUnitPrice: 61,
   cargoInsurance: 15,
   driverSalary: 600,
   taxRate: 0.07
 };
+
+const projectBaseValues = ref<Record<string, WeighBaseValues>>(
+  Object.fromEntries(
+    projects.map((project, index) => [
+      project.id,
+      {
+        taxableUnitPrice: defaultBaseValues.taxableUnitPrice + (index % 3) * 2,
+        cargoInsurance: defaultBaseValues.cargoInsurance + (index % 2) * 5,
+        driverSalary: defaultBaseValues.driverSalary + (index % 4) * 30,
+        taxRate: defaultBaseValues.taxRate
+      }
+    ])
+  )
+);
+
+const baseValuesDraft = reactive<BaseValuesDraft>({
+  taxableUnitPrice: defaultBaseValues.taxableUnitPrice,
+  cargoInsurance: defaultBaseValues.cargoInsurance,
+  driverSalary: defaultBaseValues.driverSalary,
+  taxRatePercent: defaultBaseValues.taxRate * 100
+});
 
 const pageTitle: Record<PageKey, string> = {
   agent: '智能体工作台',
@@ -90,6 +127,7 @@ const projectNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
 ];
 
 const currentProject = computed(() => projects.find((project) => project.id === selectedProjectId.value) ?? projects[0]);
+const selectedProjectBaseValues = computed(() => baseValuesForProject(selectedProjectId.value));
 const scopedWeighRows = computed(() => weighRows.value.filter((item) => item.projectId === selectedProjectId.value));
 const scopedExpenseRows = computed(() => expenseRows.value.filter((item) => item.projectId === selectedProjectId.value));
 const allApprovedExpenseRows = computed(() => [...expenseRows.value.filter((item) => item.auditStatus === '已通过'), ...bulkExpenseRows.value]);
@@ -97,22 +135,25 @@ const approvedExpenseRows = computed(() => [
   ...scopedExpenseRows.value.filter((item) => item.auditStatus === '已通过'),
   ...bulkExpenseRows.value.filter((item) => item.projectId === selectedProjectId.value)
 ]);
-const currentWeigh = computed(() => weighRows.value[reviewWeighIndex.value] ?? weighRows.value[0]);
 const currentExpense = computed(() => expenseRows.value[reviewExpenseIndex.value] ?? expenseRows.value[0]);
 
 const totalStats = computed(() => {
   const revenue = pairedWeighRows.value.reduce((sum, item) => sum + item.taxableOutput, 0);
   const transportCost = pairedWeighRows.value.reduce((sum, item) => sum + item.cargoInsurance + item.driverSalary + item.taxPoint, 0);
   const expenseCost = allApprovedExpenseRows.value.reduce((sum, item) => sum + item.amount, 0);
+  const monthTrips = pairedWeighRows.value.filter((item) => item.unloadingDate.startsWith('2026-06')).length;
+  const monthExpense = allApprovedExpenseRows.value.filter((item) => item.occurredDate.startsWith('2026-06')).reduce((sum, item) => sum + item.amount, 0);
   return {
     vehicles: vehicles.length,
     running: vehicles.filter((item) => item.status === '运营中').length,
     revenue,
     cost: transportCost + expenseCost,
     profit: revenue - transportCost - expenseCost,
-    pendingWeigh: weighRows.value.filter((item) => item.auditStatus === '待审核').length,
+    pendingWeigh: auditWeighPairs.value.filter((item) => item.status === '待审核').length,
     pendingExpense: expenseRows.value.filter((item) => item.auditStatus === '待审核').length,
-    issues: weighRows.value.filter((item) => item.anomalies.length).length + expenseRows.value.filter((item) => item.anomalies.length).length
+    issues: weighRows.value.filter((item) => item.anomalies.length).length + expenseRows.value.filter((item) => item.anomalies.length).length,
+    monthTrips,
+    monthExpense
   };
 });
 
@@ -123,7 +164,7 @@ const projectStats = computed(() => {
   const transportCost = projectBills.reduce((sum, item) => sum + item.cargoInsurance + item.driverSalary + item.taxPoint, 0);
   const expenseCost = projectExpenses.reduce((sum, item) => sum + item.amount, 0);
   return {
-    pendingWeigh: scopedWeighRows.value.filter((item) => item.auditStatus === '待审核').length,
+    pendingWeigh: auditWeighPairs.value.filter((item) => item.projectId === selectedProjectId.value && item.status === '待审核').length,
     pendingExpense: scopedExpenseRows.value.filter((item) => item.auditStatus === '待审核').length,
     revenue,
     cost: transportCost + expenseCost,
@@ -200,6 +241,70 @@ interface PairedWeighRecord {
   sourceBillId: string;
 }
 
+type WeighSource = 'departure' | 'arrival';
+
+interface WeighAuditPair {
+  id: string;
+  projectId: string;
+  departure: WeighBill;
+  arrival: WeighBill;
+  status: AuditStatus;
+  anomalies: string[];
+  vehiclePlate: string;
+  driver: string;
+  goods: string;
+  route: string;
+}
+
+interface WeighReviewField {
+  key: string;
+  label: string;
+  value: string | number;
+  source: WeighSource | 'both' | 'none';
+  rawKey?: string;
+}
+
+interface WeighReviewGroup {
+  title: string;
+  tone?: string;
+  fields: WeighReviewField[];
+}
+
+const weighHighlightSources: WeighSource[] = ['departure', 'arrival'];
+
+const weighPhotoBoxes: Record<WeighSource, Record<string, FieldBox>> = {
+  departure: {
+    receiver: { key: 'receiver', label: '收货单位', x: 18, y: 31, w: 24, h: 4 },
+    shipper: { key: 'shipper', label: '发货单位', x: 50, y: 31, w: 32, h: 4 },
+    goods: { key: 'goods', label: '货物名称', x: 24, y: 39, w: 12, h: 4 },
+    mineType: { key: 'mineType', label: '矿别', x: 38, y: 39, w: 8, h: 4 },
+    gross: { key: 'gross', label: '毛重', x: 48, y: 40, w: 8, h: 4 },
+    tare: { key: 'tare', label: '皮重', x: 66, y: 40, w: 8, h: 4 },
+    net: { key: 'net', label: '净重', x: 79, y: 40, w: 8, h: 4 },
+    carrier: { key: 'carrier', label: '承运单位', x: 24, y: 46, w: 24, h: 5 },
+    vehiclePlate: { key: 'vehiclePlate', label: '车号', x: 55, y: 46, w: 13, h: 5 },
+    driver: { key: 'driver', label: '驾驶员', x: 72, y: 46, w: 14, h: 5 },
+    remark: { key: 'remark', label: '备注', x: 24, y: 53, w: 20, h: 4 },
+    maker: { key: 'maker', label: '制单人', x: 24, y: 61, w: 18, h: 4 },
+    dateTime: { key: 'dateTime', label: '磅单时间', x: 50, y: 61, w: 21, h: 4 }
+  },
+  arrival: {
+    receiver: { key: 'receiver', label: '收货单位', x: 12, y: 65, w: 25, h: 4 },
+    shipper: { key: 'shipper', label: '发货单位', x: 50, y: 65, w: 36, h: 4 },
+    goods: { key: 'goods', label: '货物名称', x: 19, y: 72, w: 13, h: 4 },
+    mineType: { key: 'mineType', label: '矿别', x: 35, y: 72, w: 9, h: 4 },
+    gross: { key: 'gross', label: '毛重', x: 51, y: 72, w: 8, h: 4 },
+    tare: { key: 'tare', label: '皮重', x: 70, y: 72, w: 8, h: 4 },
+    net: { key: 'net', label: '净重', x: 83, y: 72, w: 10, h: 4 },
+    carrier: { key: 'carrier', label: '承运单位', x: 14, y: 78, w: 32, h: 5 },
+    vehiclePlate: { key: 'vehiclePlate', label: '车号', x: 57, y: 78, w: 13, h: 5 },
+    driver: { key: 'driver', label: '驾驶员', x: 73, y: 78, w: 15, h: 5 },
+    remark: { key: 'remark', label: '备注', x: 14, y: 85, w: 26, h: 4 },
+    maker: { key: 'maker', label: '制单人', x: 13, y: 90, w: 18, h: 4 },
+    dateTime: { key: 'dateTime', label: '磅单时间', x: 71, y: 89, w: 18, h: 4 }
+  }
+};
+
 function buildBulkExpenseRows(): Expense[] {
   const expenseTypes = [
     { type: '油费', items: ['服务区柴油', '城区油站加油', '夜间补油'], base: 420 },
@@ -268,13 +373,43 @@ function buildBulkPairedWeighRows(): PairedWeighRecord[] {
       loading: ['华银厂区', '田东料场', '砚山库'],
       unloading: ['田东华银料场', '靖西中转库', '砚山入库点'],
       base: 41.6
+    },
+    p4: {
+      customer: '昭通能源集团有限公司',
+      goods: ['电煤5500', '洗精煤', '混煤'],
+      loading: ['威信集运站', '镇雄煤场', '彝良装车点'],
+      unloading: ['昭通电厂', '水富码头', '盐津储煤库'],
+      base: 43.8
+    },
+    p5: {
+      customer: '黔西南海螺水泥有限公司',
+      goods: ['水泥熟料', '石灰石粉', '矿渣微粉'],
+      loading: ['兴义熟料库', '安龙粉磨站', '贞丰矿山'],
+      unloading: ['晴隆搅拌站', '册亨项目部', '兴义水泥厂'],
+      base: 38.6
+    },
+    p6: {
+      customer: '滇中新材料科技有限公司',
+      goods: ['新能源矿粉', '石英砂', '矿渣粉'],
+      loading: ['安宁中转仓', '嵩明矿粉库', '楚雄装车点'],
+      unloading: ['滇中新区工厂', '昆明经开仓', '玉溪产业园'],
+      base: 36.9
+    },
+    p7: {
+      customer: '百色矿业集团有限公司',
+      goods: ['铝土矿', '赤泥', '熟料'],
+      loading: ['平果矿区', '田阳堆场', '德保料场'],
+      unloading: ['百色氧化铝厂', '田东码头', '靖西中转库'],
+      base: 40.8
     }
   };
 
   return projects.flatMap((project, projectIndex) => {
     const projectVehicles = vehicles.filter((vehicle) => vehicle.projectId === project.id);
     const route = routeMap[project.id];
-    const sourceBillId = weighRows.value.find((item) => item.projectId === project.id)?.id ?? weighRows.value[0].id;
+    if (!route || projectVehicles.length === 0) return [];
+    const sourceBillId = weighRows.value.find((item) => item.projectId === project.id)?.id ?? '';
+    const baseValues = baseValuesForProject(project.id);
 
     return Array.from({ length: 96 }, (_, index) => {
       const vehicle = projectVehicles[index % projectVehicles.length];
@@ -284,9 +419,9 @@ function buildBulkPairedWeighRows(): PairedWeighRecord[] {
       const unloadingDate = `2026-06-${unloadDay}`;
       const loadingTonnage = Number((route.base + (index % 7) * 0.46 + (index % 3) * 0.12).toFixed(2));
       const unloadingTonnage = Number((loadingTonnage - (index % 5) * 0.04).toFixed(2));
-      const taxableOutput = unloadingTonnage * weighDefaults.taxableUnitPrice;
-      const taxPoint = taxableOutput * weighDefaults.taxRate;
-      const profit = taxableOutput - weighDefaults.cargoInsurance - weighDefaults.driverSalary - taxPoint;
+      const taxableOutput = unloadingTonnage * baseValues.taxableUnitPrice;
+      const taxPoint = taxableOutput * baseValues.taxRate;
+      const profit = taxableOutput - baseValues.cargoInsurance - baseValues.driverSalary - taxPoint;
 
       return {
         id: `MOCK-${project.id}-${index + 1}`,
@@ -303,10 +438,10 @@ function buildBulkPairedWeighRows(): PairedWeighRecord[] {
         loadingTonnage,
         unloadingPlace: route.unloading[(index + 1) % route.unloading.length],
         unloadingTonnage,
-        taxableUnitPrice: weighDefaults.taxableUnitPrice,
-        cargoInsurance: weighDefaults.cargoInsurance,
-        taxRate: weighDefaults.taxRate,
-        driverSalary: weighDefaults.driverSalary,
+        taxableUnitPrice: baseValues.taxableUnitPrice,
+        cargoInsurance: baseValues.cargoInsurance,
+        taxRate: baseValues.taxRate,
+        driverSalary: baseValues.driverSalary,
         taxableOutput,
         taxPoint,
         profit,
@@ -335,9 +470,10 @@ const pairedWeighRows = computed<PairedWeighRecord[]>(() => {
       if (!arrival) return null;
       usedArrivalIds.add(arrival.id);
 
-      const taxableOutput = arrival.net * weighDefaults.taxableUnitPrice;
-      const taxPoint = taxableOutput * weighDefaults.taxRate;
-      const profit = taxableOutput - weighDefaults.cargoInsurance - weighDefaults.driverSalary - taxPoint;
+      const baseValues = baseValuesForProject(departure.projectId);
+      const taxableOutput = arrival.net * baseValues.taxableUnitPrice;
+      const taxPoint = taxableOutput * baseValues.taxRate;
+      const profit = taxableOutput - baseValues.cargoInsurance - baseValues.driverSalary - taxPoint;
       const routeParts = departure.remark.includes('-') ? departure.remark.split('-') : [];
 
       return {
@@ -355,10 +491,10 @@ const pairedWeighRows = computed<PairedWeighRecord[]>(() => {
         loadingTonnage: departure.net,
         unloadingPlace: routeParts[1] || arrival.receiver,
         unloadingTonnage: arrival.net,
-        taxableUnitPrice: weighDefaults.taxableUnitPrice,
-        cargoInsurance: weighDefaults.cargoInsurance,
-        taxRate: weighDefaults.taxRate,
-        driverSalary: weighDefaults.driverSalary,
+        taxableUnitPrice: baseValues.taxableUnitPrice,
+        cargoInsurance: baseValues.cargoInsurance,
+        taxRate: baseValues.taxRate,
+        driverSalary: baseValues.driverSalary,
         taxableOutput,
         taxPoint,
         profit,
@@ -375,15 +511,55 @@ const pairedWeighRows = computed<PairedWeighRecord[]>(() => {
   return [...imageDerivedRows, ...buildBulkPairedWeighRows()];
 });
 
+const auditWeighPairs = computed<WeighAuditPair[]>(() => {
+  const rows = weighRows.value.filter((item) => item.type !== '未识别');
+  const departures = rows.filter((item) => item.type === '出发磅单');
+  const arrivals = rows.filter((item) => item.type === '到货磅单');
+  const usedArrivalIds = new Set<string>();
+
+  return departures
+    .map((departure) => {
+      const arrival =
+        arrivals
+          .filter((item) => !usedArrivalIds.has(item.id))
+          .filter((item) => item.projectId === departure.projectId && item.vehiclePlate === departure.vehiclePlate && item.goods === departure.goods)
+          .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`))[0] ??
+        arrivals
+          .filter((item) => !usedArrivalIds.has(item.id))
+          .filter((item) => item.projectId === departure.projectId && item.goods === departure.goods)
+          .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`))[0];
+
+      if (!arrival) return null;
+      usedArrivalIds.add(arrival.id);
+      return buildWeighAuditPair(departure, arrival);
+    })
+    .filter((item): item is WeighAuditPair => Boolean(item));
+});
+
+const currentWeighPair = computed(() => auditWeighPairs.value[reviewWeighPairIndex.value] ?? auditWeighPairs.value[0] ?? buildWeighAuditPair(weighRows.value[0], weighRows.value[1] ?? weighRows.value[0]));
+
 const filteredPairedWeighRows = computed(() =>
   pairedWeighRows.value.filter((item) => {
     const keyword = weighKeyword.value.trim();
+    const routeKey = `${item.loadingPlace} → ${item.unloadingPlace}`;
+    const routeMatched = weighRouteFilter.value === '全部线路' || weighRouteFilter.value === routeKey;
     const keywordMatched =
       !keyword ||
       [item.vehiclePlate, item.driver, item.goods, item.customer, item.loadingPlace, item.unloadingPlace, item.orderNo].some((value) => value.includes(keyword));
-    return item.projectId === selectedProjectId.value && keywordMatched;
+    return item.projectId === selectedProjectId.value && routeMatched && keywordMatched;
   })
 );
+
+const weighRouteOptions = computed(() => {
+  const map = new Map<string, number>();
+  pairedWeighRows.value
+    .filter((item) => item.projectId === selectedProjectId.value)
+    .forEach((item) => {
+      const routeKey = `${item.loadingPlace} → ${item.unloadingPlace}`;
+      map.set(routeKey, (map.get(routeKey) ?? 0) + 1);
+    });
+  return [...map.entries()].map(([route, count]) => ({ label: route, value: route, count }));
+});
 
 const filteredExpenseRows = computed(() =>
   approvedExpenseRows.value.filter((item) => {
@@ -413,6 +589,17 @@ const expenseListSummary = computed(() => ({
 
 const vehicleRank = computed(() => [...vehicleFinance.value].sort((a, b) => b.profit - a.profit));
 const selectedProjectVehicles = computed(() => vehicles.filter((item) => item.projectId === selectedProjectId.value));
+const projectOperatingVehicles = computed(() =>
+  selectedProjectVehicles.value
+    .filter((vehicle) => vehicle.status === '运营中')
+    .slice(0, 9)
+    .map((vehicle, index) => ({
+      ...vehicle,
+      workStatus: vehicleWorkStatus(index),
+      location: vehicleLocation(selectedProjectId.value, index),
+      updatedAt: `${String(8 + (index % 10)).padStart(2, '0')}:${String((index * 7 + 12) % 60).padStart(2, '0')}`
+    }))
+);
 const maxVehicleProfit = computed(() => Math.max(1, ...vehicleRank.value.map((item) => Math.abs(item.profit))));
 
 const expenseTypeSummary = computed(() => {
@@ -429,18 +616,20 @@ const expenseDriverSummary = computed(() => {
     .sort((a, b) => b.amount - a.amount);
 });
 
-const dailyProfitTrend = computed(() => {
-  const days = ['06-23', '06-24', '06-25', '06-26', '06-27', '06-28', '06-29'];
-  return days.map((day) => {
-    const date = `2026-${day}`;
-    const revenue = weighRows.value.filter((item) => item.date === date).reduce((sum, item) => sum + item.freight, 0);
-    const billCost = weighRows.value.filter((item) => item.date === date).reduce((sum, item) => sum + item.cost, 0);
-    const expenseCost = expenseRows.value.filter((item) => item.occurredDate === date).reduce((sum, item) => sum + item.amount, 0);
-    return { day, profit: revenue - billCost - expenseCost };
+const projectMonthlyProfitTrend = computed(() => {
+  const projectId = dashboardTrendProjectId.value;
+  return Array.from({ length: 30 }, (_, index) => {
+    const dayNo = String(index + 1).padStart(2, '0');
+    const date = `2026-06-${dayNo}`;
+    const bills = pairedWeighRows.value.filter((item) => item.projectId === projectId && item.unloadingDate === date);
+    const revenue = bills.reduce((sum, item) => sum + item.taxableOutput, 0);
+    const billCost = bills.reduce((sum, item) => sum + item.cargoInsurance + item.driverSalary + item.taxPoint, 0);
+    const expenseCost = allApprovedExpenseRows.value.filter((item) => item.projectId === projectId && item.occurredDate === date).reduce((sum, item) => sum + item.amount, 0);
+    return { day: `${dayNo}日`, profit: revenue - billCost - expenseCost };
   });
 });
 
-const maxDailyProfit = computed(() => Math.max(1, ...dailyProfitTrend.value.map((item) => Math.abs(item.profit))));
+const maxProjectTrendProfit = computed(() => Math.max(1, ...projectMonthlyProfitTrend.value.map((item) => Math.abs(item.profit))));
 
 const projectProfitComparison = computed(() =>
   projects.map((project) => {
@@ -518,23 +707,50 @@ const vehicleExpenseColumns = [
   { title: '提报时间', dataIndex: 'submittedAt', width: 146 }
 ];
 
-const weighFields = computed(() => {
-  const item = currentWeigh.value;
+const weighFieldGroups = computed<WeighReviewGroup[]>(() => {
+  const pair = currentWeighPair.value;
+  const departure = pair.departure;
+  const arrival = pair.arrival;
   return [
-    field('type', '单据类型', item.type),
-    field('receiver', '收货单位', item.receiver),
-    field('shipper', '发货单位', item.shipper),
-    field('goods', '货物名称', item.goods),
-    field('mineType', '矿别', item.mineType),
-    field('gross', '毛重', item.gross),
-    field('tare', '皮重', item.tare),
-    field('net', '净重', item.net),
-    field('carrier', '承运单位', item.carrier),
-    field('vehiclePlate', '车号', item.vehiclePlate),
-    field('driver', '驾驶员', item.driver),
-    field('remark', '备注', item.remark),
-    field('maker', '制单人', item.maker),
-    field('dateTime', '磅单时间', `${item.date} ${item.time}`)
+    {
+      title: '公共信息',
+      fields: [
+        reviewField('vehiclePlate', '车号', pair.vehiclePlate, 'both', 'vehiclePlate'),
+        reviewField('driver', '驾驶员', pair.driver, 'both', 'driver'),
+        reviewField('goods', '货物名称', pair.goods, 'both', 'goods'),
+        reviewField('mineType', '矿别', departure.mineType, 'both', 'mineType'),
+        reviewField('carrier', '承运单位', departure.carrier, 'both', 'carrier'),
+        reviewField('route', '线路', pair.route, 'none')
+      ]
+    },
+    {
+      title: '装货磅单',
+      tone: 'blue',
+      fields: [
+        reviewField('departure.receiver', '收货单位', departure.receiver, 'departure', 'receiver'),
+        reviewField('departure.shipper', '发货单位', departure.shipper, 'departure', 'shipper'),
+        reviewField('departure.gross', '毛重', departure.gross, 'departure', 'gross'),
+        reviewField('departure.tare', '皮重', departure.tare, 'departure', 'tare'),
+        reviewField('departure.net', '净重', departure.net, 'departure', 'net'),
+        reviewField('departure.remark', '备注', departure.remark, 'departure', 'remark'),
+        reviewField('departure.maker', '制单人', departure.maker, 'departure', 'maker'),
+        reviewField('departure.dateTime', '磅单时间', `${departure.date} ${departure.time}`, 'departure', 'dateTime')
+      ]
+    },
+    {
+      title: '卸货磅单',
+      tone: 'green',
+      fields: [
+        reviewField('arrival.receiver', '收货单位', arrival.receiver, 'arrival', 'receiver'),
+        reviewField('arrival.shipper', '发货单位', arrival.shipper, 'arrival', 'shipper'),
+        reviewField('arrival.gross', '毛重', arrival.gross, 'arrival', 'gross'),
+        reviewField('arrival.tare', '皮重', arrival.tare, 'arrival', 'tare'),
+        reviewField('arrival.net', '净重', arrival.net, 'arrival', 'net'),
+        reviewField('arrival.remark', '备注', arrival.remark, 'arrival', 'remark'),
+        reviewField('arrival.maker', '制单人', arrival.maker, 'arrival', 'maker'),
+        reviewField('arrival.dateTime', '磅单时间', `${arrival.date} ${arrival.time}`, 'arrival', 'dateTime')
+      ]
+    }
   ];
 });
 
@@ -553,11 +769,46 @@ const expenseFields = computed(() => {
   ];
 });
 
-const activeWeighBox = computed(() => currentWeigh.value.fieldBoxes.find((box) => box.key === activeFieldKey.value));
+const flatWeighFields = computed(() => weighFieldGroups.value.flatMap((group) => group.fields));
+const activeWeighField = computed(() => flatWeighFields.value.find((item) => item.key === activeFieldKey.value));
 const activeExpenseBox = computed(() => currentExpense.value.fieldBoxes.find((box) => box.key === activeExpenseFieldKey.value));
 
 function field(key: string, label: string, value: string | number) {
   return { key, label, value };
+}
+
+function reviewField(key: string, label: string, value: string | number, source: WeighReviewField['source'], rawKey?: string): WeighReviewField {
+  return { key, label, value, source, rawKey };
+}
+
+function baseValuesForProject(projectId: string): WeighBaseValues {
+  return projectBaseValues.value[projectId] ?? defaultBaseValues;
+}
+
+function buildWeighAuditPair(departure: WeighBill, arrival: WeighBill): WeighAuditPair {
+  const anomalies = [...new Set([...departure.anomalies, ...arrival.anomalies])];
+  const status = pairAuditStatus(departure, arrival);
+  const routeParts = departure.remark.includes('-') ? departure.remark.split('-') : [];
+  return {
+    id: `${departure.id}-${arrival.id}`,
+    projectId: departure.projectId,
+    departure,
+    arrival,
+    status,
+    anomalies,
+    vehiclePlate: departure.vehiclePlate === arrival.vehiclePlate ? departure.vehiclePlate : `${departure.vehiclePlate} / ${arrival.vehiclePlate}`,
+    driver: departure.driver,
+    goods: departure.goods,
+    route: `${routeParts[0] || departure.shipper} → ${routeParts[1] || arrival.receiver}`
+  };
+}
+
+function pairAuditStatus(departure: WeighBill, arrival: WeighBill): AuditStatus {
+  const statuses = [departure.auditStatus, arrival.auditStatus];
+  if (statuses.includes('待审核')) return '待审核';
+  if (statuses.includes('已驳回')) return '已驳回';
+  if (statuses.includes('有疑点')) return '有疑点';
+  return '已通过';
 }
 
 function money(value: number) {
@@ -572,8 +823,26 @@ function projectName(projectId: string) {
   return projects.find((project) => project.id === projectId)?.name ?? '-';
 }
 
+function vehicleWorkStatus(index: number) {
+  return ['装货中', '在途', '卸货中', '放空'][index % 4];
+}
+
+function vehicleLocation(projectId: string, index: number) {
+  const map: Record<string, string[]> = {
+    p1: ['砚山储配站', '广昆高速 G80', '广西德保电厂', '靖西服务区'],
+    p2: ['富源采石场', '宣曲高速入口', '曲靖园区北门', '宣威搅拌站'],
+    p3: ['华银厂区', '田东收费站', '靖西中转库', '砚山库外排队区'],
+    p4: ['威信集运站', '宜昭高速', '昭通电厂 2 号门', '水富码头'],
+    p5: ['兴义熟料库', '安龙粉磨站', '晴隆搅拌站', '册亨项目部'],
+    p6: ['安宁中转仓', '昆楚高速', '滇中新区工厂', '昆明经开仓'],
+    p7: ['平果矿区', '田阳堆场', '百色氧化铝厂', '田东码头']
+  };
+  const locations = map[projectId] ?? ['项目装货点', '高速在途', '项目卸货点', '返程路段'];
+  return locations[index % locations.length];
+}
+
 function projectPendingWeigh(projectId: string) {
-  return weighRows.value.filter((item) => item.projectId === projectId && item.auditStatus === '待审核').length;
+  return auditWeighPairs.value.filter((item) => item.projectId === projectId && item.status === '待审核').length;
 }
 
 function projectPendingExpense(projectId: string) {
@@ -619,14 +888,64 @@ function boxStyle(box?: FieldBox) {
   };
 }
 
+function weighBoxForSource(source: WeighSource) {
+  const field = activeWeighField.value;
+  if (!field?.rawKey || (field.source !== source && field.source !== 'both')) return undefined;
+  const box = weighPhotoBoxes[source][field.rawKey];
+  return box ? { ...box, label: field.label } : undefined;
+}
+
+function weighMagnifierStyle(source: WeighSource) {
+  const box = weighBoxForSource(source);
+  if (!box) return {};
+  return {
+    left: `${Math.min(68, box.x + box.w + 3)}%`,
+    top: `${Math.max(8, box.y - 8)}%`,
+    backgroundImage: `url(${currentWeighPair.value.departure.image})`,
+    backgroundPosition: `${box.x + box.w / 2}% ${box.y + box.h / 2}%`
+  };
+}
+
 function selectProject(projectId: string) {
   selectedProjectId.value = projectId;
   const firstVehicle = vehicles.find((item) => item.projectId === projectId);
   if (firstVehicle) selectedVehicleId.value = firstVehicle.id;
+  weighRouteFilter.value = '全部线路';
+  syncReviewPointersForProject(projectId);
   projectMenuExpanded.value = false;
   window.setTimeout(() => {
     projectMenuExpanded.value = true;
   }, 45);
+}
+
+function syncReviewPointersForProject(projectId: string) {
+  const pendingWeighIndex = auditWeighPairs.value.findIndex((item) => item.projectId === projectId && item.status === '待审核');
+  const fallbackWeighIndex = auditWeighPairs.value.findIndex((item) => item.projectId === projectId);
+  const nextWeighIndex = pendingWeighIndex >= 0 ? pendingWeighIndex : fallbackWeighIndex;
+  if (nextWeighIndex >= 0) reviewWeighPairIndex.value = nextWeighIndex;
+
+  const pendingExpenseIndex = expenseRows.value.findIndex((item) => item.projectId === projectId && item.auditStatus === '待审核');
+  const fallbackExpenseIndex = expenseRows.value.findIndex((item) => item.projectId === projectId);
+  const nextExpenseIndex = pendingExpenseIndex >= 0 ? pendingExpenseIndex : fallbackExpenseIndex;
+  if (nextExpenseIndex >= 0) reviewExpenseIndex.value = nextExpenseIndex;
+
+  activeFieldKey.value = '';
+  activeExpenseFieldKey.value = '';
+  expenseImageIndex.value = 0;
+}
+
+function openProjectWorkbench(projectId: string) {
+  selectProject(projectId);
+  activePage.value = 'agent';
+  agentRightPanelVisible.value = true;
+}
+
+function handleSidebarProjectClick(projectId: string) {
+  if (activePage.value === 'dashboard') {
+    openProjectWorkbench(projectId);
+    return;
+  }
+  selectProject(projectId);
 }
 
 function navigate(page: PageKey) {
@@ -635,7 +954,8 @@ function navigate(page: PageKey) {
 
 function goWeighAudit(record?: WeighBill) {
   if (record) {
-    reviewWeighIndex.value = Math.max(0, weighRows.value.findIndex((item) => item.id === record.id));
+    const pairIndex = auditWeighPairs.value.findIndex((item) => item.departure.id === record.id || item.arrival.id === record.id);
+    reviewWeighPairIndex.value = Math.max(0, pairIndex);
   }
   activePage.value = 'weighAudit';
 }
@@ -661,18 +981,58 @@ function goVehicle(vehicleId: string) {
 }
 
 function updateWeighValue(key: string, value: string) {
-  const record = currentWeigh.value as unknown as Record<string, string | number>;
-  if (['gross', 'tare', 'net', 'freight', 'cost'].includes(key)) {
-    record[key] = Number(value) || 0;
-    return;
-  }
-  if (key === 'dateTime') {
-    const [date, time] = value.split(' ');
-    record.date = date || currentWeigh.value.date;
-    record.time = time || currentWeigh.value.time;
-    return;
-  }
-  record[key] = value;
+  const pair = currentWeighPair.value;
+  const [sourceKey, rawKey] = key.includes('.') ? key.split('.') : ['', key];
+  const targets =
+    sourceKey === 'departure' || sourceKey === 'arrival'
+      ? [pair[sourceKey] as WeighBill]
+      : ['vehiclePlate', 'driver', 'goods', 'mineType', 'carrier'].includes(rawKey)
+        ? [pair.departure, pair.arrival]
+        : [];
+
+  if (rawKey === 'route' || targets.length === 0) return;
+
+  targets.forEach((target) => {
+    const record = target as unknown as Record<string, string | number>;
+    if (['gross', 'tare', 'net', 'freight', 'cost'].includes(rawKey)) {
+      record[rawKey] = Number(value) || 0;
+      return;
+    }
+    if (rawKey === 'dateTime') {
+      const [date, time] = value.split(' ');
+      target.date = date || target.date;
+      target.time = time || target.time;
+      return;
+    }
+    record[rawKey] = value;
+  });
+}
+
+function updateBaseValueDraft(key: keyof BaseValuesDraft, value: unknown) {
+  baseValuesDraft[key] = Number(value) || 0;
+}
+
+function openBaseValuesModal() {
+  const values = selectedProjectBaseValues.value;
+  baseValuesDraft.taxableUnitPrice = values.taxableUnitPrice;
+  baseValuesDraft.cargoInsurance = values.cargoInsurance;
+  baseValuesDraft.driverSalary = values.driverSalary;
+  baseValuesDraft.taxRatePercent = Number((values.taxRate * 100).toFixed(2));
+  baseValuesModalVisible.value = true;
+}
+
+function saveBaseValues() {
+  projectBaseValues.value = {
+    ...projectBaseValues.value,
+    [selectedProjectId.value]: {
+      taxableUnitPrice: Number(baseValuesDraft.taxableUnitPrice) || defaultBaseValues.taxableUnitPrice,
+      cargoInsurance: Number(baseValuesDraft.cargoInsurance) || 0,
+      driverSalary: Number(baseValuesDraft.driverSalary) || 0,
+      taxRate: (Number(baseValuesDraft.taxRatePercent) || 0) / 100
+    }
+  };
+  baseValuesModalVisible.value = false;
+  message.success(`${currentProject.value.name} 基本数值已更新`);
 }
 
 function onWeighInput(key: string, value: unknown) {
@@ -693,12 +1053,14 @@ function onExpenseInput(key: string, value: unknown) {
 }
 
 function previousWeigh() {
-  reviewWeighIndex.value = reviewWeighIndex.value <= 0 ? weighRows.value.length - 1 : reviewWeighIndex.value - 1;
+  const total = auditWeighPairs.value.length;
+  reviewWeighPairIndex.value = reviewWeighPairIndex.value <= 0 ? Math.max(0, total - 1) : reviewWeighPairIndex.value - 1;
   activeFieldKey.value = '';
 }
 
 function nextWeigh() {
-  reviewWeighIndex.value = (reviewWeighIndex.value + 1) % weighRows.value.length;
+  const total = auditWeighPairs.value.length || 1;
+  reviewWeighPairIndex.value = (reviewWeighPairIndex.value + 1) % total;
   activeFieldKey.value = '';
 }
 
@@ -715,8 +1077,9 @@ function nextExpense() {
 }
 
 function markWeigh(status: AuditStatus) {
-  currentWeigh.value.auditStatus = status;
-  message.success(`磅单 ${currentWeigh.value.id} 已标记为${status}`);
+  currentWeighPair.value.departure.auditStatus = status;
+  currentWeighPair.value.arrival.auditStatus = status;
+  message.success(`磅单组 ${currentWeighPair.value.id} 已标记为${status}`);
   if (status === '已通过') nextWeigh();
 }
 
@@ -727,8 +1090,9 @@ function markExpense(status: AuditStatus) {
 }
 
 function saveWeigh() {
-  currentWeigh.value.anomalies = currentWeigh.value.anomalies.filter(Boolean);
-  message.success('磅单修改已保存');
+  currentWeighPair.value.departure.anomalies = currentWeighPair.value.departure.anomalies.filter(Boolean);
+  currentWeighPair.value.arrival.anomalies = currentWeighPair.value.arrival.anomalies.filter(Boolean);
+  message.success('磅单组修改已保存');
 }
 
 function markExpensePaid(record: Expense) {
@@ -750,17 +1114,38 @@ function sendAgent(text?: string) {
   agentMessages.value.push(reply);
 }
 
+function resultCardTarget(card: NonNullable<AgentMessage['resultCards']>[number]) {
+  if (card.action) return card.action;
+  if (card.label.includes('待审核磅单')) return 'weighAudit';
+  if (card.label.includes('待审核报销')) return 'expenseAudit';
+  return undefined;
+}
+
+function handleResultCardClick(card: NonNullable<AgentMessage['resultCards']>[number]) {
+  const target = resultCardTarget(card);
+  if (!target) return;
+  if (target === 'weighAudit') {
+    const pending = auditWeighPairs.value.find((item) => item.projectId === selectedProjectId.value && item.status === '待审核');
+    if (pending) reviewWeighPairIndex.value = auditWeighPairs.value.findIndex((item) => item.id === pending.id);
+  }
+  if (target === 'expenseAudit') {
+    const pending = expenseRows.value.find((item) => item.projectId === selectedProjectId.value && item.auditStatus === '待审核');
+    if (pending) reviewExpenseIndex.value = expenseRows.value.findIndex((item) => item.id === pending.id);
+  }
+  activePage.value = target;
+}
+
 function buildAgentReply(content: string): AgentMessage {
   if (content.includes('今日') && content.includes('待审核') && content.includes('磅单')) {
     activePage.value = 'weighAudit';
-    const pending = scopedWeighRows.value.filter((item) => item.auditStatus === '待审核');
-    if (pending[0]) reviewWeighIndex.value = weighRows.value.findIndex((item) => item.id === pending[0].id);
+    const pending = auditWeighPairs.value.filter((item) => item.projectId === selectedProjectId.value && item.status === '待审核');
+    if (pending[0]) reviewWeighPairIndex.value = auditWeighPairs.value.findIndex((item) => item.id === pending[0].id);
     return {
       role: 'agent',
       content: `已切换到磅单审核。当前项目有 ${pending.length} 张待审核磅单，其中 ${pending.filter((item) => item.anomalies.length).length} 张带异常提示。`,
       skills: ['磅单识别队列', '异常校验'],
       resultCards: [
-        { label: '待审核磅单', value: `${pending.length} 张`, tone: 'orange' },
+        { label: '待审核磅单', value: `${pending.length} 张`, tone: 'orange', action: 'weighAudit' },
         { label: '有疑点', value: `${pending.filter((item) => item.anomalies.length).length} 张`, tone: 'red' }
       ]
     };
@@ -810,7 +1195,8 @@ function buildAgentReply(content: string): AgentMessage {
     return {
       role: 'agent',
       content: `已进入报销审核队列。当前项目有 ${pending.length} 笔待审核报销，支持连续审核和字段定位高亮。`,
-      skills: ['报销识别队列', '凭证金额校验']
+      skills: ['报销识别队列', '凭证金额校验'],
+      resultCards: [{ label: '待审核报销', value: `${pending.length} 笔`, tone: 'orange', action: 'expenseAudit' }]
     };
   }
   if (content.includes('导出磅单')) {
@@ -829,14 +1215,6 @@ function buildAgentReply(content: string): AgentMessage {
       content: '已生成付款明细表预览，包含付款日期、费用类型、车牌、内容、金额、付款对象和支付状态。',
       skills: ['付款明细导出', '财务科目归集'],
       resultCards: [{ label: '可导出费用', value: `${filteredExpenseRows.value.length} 笔`, tone: 'blue' }]
-    };
-  }
-  if (content.includes('对账摘要')) {
-    activePage.value = 'dashboard';
-    return {
-      role: 'agent',
-      content: `本周对账摘要：总运费 ${money(totalStats.value.revenue)}，总成本 ${money(totalStats.value.cost)}，毛利 ${money(totalStats.value.profit)}；需优先处理 ${totalStats.value.pendingWeigh} 张待审磅单和 ${totalStats.value.pendingExpense} 笔待审报销。`,
-      skills: ['周报生成', '异常聚合']
     };
   }
   return {
@@ -861,17 +1239,28 @@ function nextExpenseImage() {
         colorWarning: '#FB892A',
         colorError: '#F77113',
         borderRadius: 6,
-        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif'
+        fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif'
       }
     }"
   >
-    <div class="app-shell" :class="{ 'no-right': activePage === 'weighList' || activePage === 'vehicleDetail' }">
+    <div
+      class="app-shell"
+      :class="{
+        'no-right':
+          activePage === 'dashboard' ||
+          activePage === 'weighList' ||
+          activePage === 'vehicleDetail' ||
+          activePage === 'weighAudit' ||
+          activePage === 'expenseAudit' ||
+          (activePage === 'agent' && !agentRightPanelVisible)
+      }"
+    >
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark"><RobotOutlined /></div>
+          <img class="brand-mark" src="/kxcl-happy-fleet-logo.svg?v=2" alt="" />
           <div>
-            <strong>车队智能账务</strong>
-            <span>Agent Demo</span>
+            <strong>开心车联</strong>
+            <span>Fleet Agent</span>
           </div>
         </div>
 
@@ -889,29 +1278,30 @@ function nextExpenseImage() {
           </button>
         </div>
 
-        <div class="side-section">
+        <div class="side-section project-section">
           <div class="side-title">项目 / 车队</div>
-          <button
-            v-for="project in projects"
-            :key="project.id"
-            class="project-card"
-            :class="{ active: project.id === selectedProjectId }"
-            @click="selectProject(project.id)"
-          >
-            <div class="project-card-head">
-              <strong>{{ project.name }}</strong>
-              <a-badge :count="projectPendingTotal(project.id)" :number-style="{ backgroundColor: '#F77113' }" />
-            </div>
-            <span>{{ project.route }}</span>
-            <div class="project-card-metrics">
-              <span>{{ projectVehicleCount(project.id) }} 车</span>
-              <span :class="{ danger: projectProfitValue(project.id) < 0 }">{{ money(projectProfitValue(project.id)) }}</span>
-            </div>
-          </button>
+          <div class="project-list">
+            <button
+              v-for="project in projects"
+              :key="project.id"
+              class="project-card"
+              :class="{ active: activePage !== 'dashboard' && project.id === selectedProjectId }"
+              @click="handleSidebarProjectClick(project.id)"
+            >
+              <div class="project-card-head">
+                <strong>{{ project.name }}</strong>
+                <a-badge v-if="projectPendingTotal(project.id) > 0" :count="projectPendingTotal(project.id)" :number-style="{ backgroundColor: '#F77113' }" />
+              </div>
+              <div class="project-card-metrics">
+                <span>{{ projectVehicleCount(project.id) }} 车</span>
+                <span :class="{ danger: projectProfitValue(project.id) < 0 }">{{ money(projectProfitValue(project.id)) }}</span>
+              </div>
+            </button>
+          </div>
         </div>
 
         <div class="side-section nav-section project-menu-drawer" :class="{ expanded: projectMenuExpanded }">
-          <div class="side-title">当前项目操作</div>
+          <div class="side-title">{{ activePage === 'dashboard' ? '功能导航' : '当前项目操作' }}</div>
           <div class="drawer-inner">
             <button v-for="item in projectNavItems" :key="item.key" class="nav-item" :class="{ active: activePage === item.key }" @click="navigate(item.key)">
               <component :is="item.icon" />
@@ -936,22 +1326,21 @@ function nextExpenseImage() {
       <main class="main-panel">
         <header class="topbar">
           <div>
-            <span class="eyebrow">{{ currentProject.name }}</span>
+            <span v-if="activePage !== 'dashboard'" class="eyebrow">{{ currentProject.name }}</span>
             <h1>{{ pageTitle[activePage] }}</h1>
           </div>
           <div class="topbar-actions">
-            <a-button type="primary" @click="sendAgent('生成本周财务对账摘要')">
-              <BarChartOutlined />
-              生成摘要
+            <a-button v-if="activePage === 'agent'" @click="agentRightPanelVisible = !agentRightPanelVisible">
+              <template #icon>
+                <component :is="agentRightPanelVisible ? LeftOutlined : RightOutlined" />
+              </template>
+              {{ agentRightPanelVisible ? '隐藏右栏' : '显示右栏' }}
             </a-button>
           </div>
         </header>
 
         <section v-if="activePage === 'agent'" class="content agent-layout">
           <div class="chat-panel">
-            <div class="quick-grid">
-              <button v-for="prompt in quickPrompts" :key="prompt" @click="sendAgent(prompt)">{{ prompt }}</button>
-            </div>
             <div class="chat-stream">
               <div v-for="(msg, index) in agentMessages" :key="index" class="chat-message" :class="msg.role">
                 <div class="avatar">{{ msg.role === 'agent' ? 'AI' : '我' }}</div>
@@ -961,16 +1350,41 @@ function nextExpenseImage() {
                     <a-tag v-for="skill in msg.skills" :key="skill" color="blue">{{ skill }}</a-tag>
                   </div>
                   <div v-if="msg.resultCards?.length" class="result-row">
-                    <div v-for="card in msg.resultCards" :key="card.label" class="mini-result" :class="card.tone">
+                    <button
+                      v-for="card in msg.resultCards"
+                      :key="card.label"
+                      class="mini-result"
+                      :class="[card.tone, { clickable: resultCardTarget(card) }]"
+                      type="button"
+                      @click="handleResultCardClick(card)"
+                    >
                       <span>{{ card.label }}</span>
                       <strong>{{ card.value }}</strong>
-                    </div>
+                    </button>
                   </div>
                 </div>
               </div>
             </div>
             <div class="chat-input">
-              <a-input-search v-model:value="agentInput" size="large" placeholder="例如：赣J03528这趟赚了多少钱" enter-button="发送" @search="sendAgent()" />
+              <div class="quick-grid">
+                <span class="quick-label">推荐指令</span>
+                <button v-for="prompt in quickPrompts" :key="prompt" @click="sendAgent(prompt)">{{ prompt }}</button>
+              </div>
+              <div class="agent-composer">
+                <a-textarea
+                  v-model:value="agentInput"
+                  :bordered="false"
+                  :auto-size="{ minRows: 2, maxRows: 4 }"
+                  placeholder="发消息..."
+                  @keydown.enter.exact.prevent="sendAgent()"
+                />
+                <div class="composer-toolbar">
+                  <span>Enter 发送，Shift Enter 换行</span>
+                  <a-button type="primary" shape="circle" @click="sendAgent()">
+                    <template #icon><MessageOutlined /></template>
+                  </a-button>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -978,16 +1392,16 @@ function nextExpenseImage() {
         <section v-else-if="activePage === 'weighAudit'" class="content review-screen">
           <div class="review-summary">
             <div>
-              <span>当前 {{ reviewWeighIndex + 1 }} / {{ weighRows.length }}</span>
-              <strong>{{ currentWeigh.vehiclePlate }} · {{ currentWeigh.goods }} · {{ ton(currentWeigh.net) }}</strong>
+              <span>当前 {{ reviewWeighPairIndex + 1 }} / {{ auditWeighPairs.length }}</span>
+              <strong>{{ currentWeighPair.vehiclePlate }} · {{ currentWeighPair.goods }} · 装 {{ ton(currentWeighPair.departure.net) }} / 卸 {{ ton(currentWeighPair.arrival.net) }}</strong>
             </div>
             <div class="summary-tags">
-              <a-tag :color="statusColor(currentWeigh.auditStatus)">{{ currentWeigh.auditStatus }}</a-tag>
-              <a-tag v-for="item in currentWeigh.anomalies" :key="item" color="red">{{ item }}</a-tag>
+              <a-tag :color="statusColor(currentWeighPair.status)">{{ currentWeighPair.status }}</a-tag>
+              <a-tag v-for="item in currentWeighPair.anomalies" :key="item" color="red">{{ item }}</a-tag>
             </div>
           </div>
 
-          <div class="review-grid">
+          <div class="review-grid paired-review-grid">
             <div class="document-pane">
               <div class="image-toolbar">
                 <a-button size="small" @click="weighZoom = Math.max(0.7, weighZoom - 0.1)"><ZoomOutOutlined /></a-button>
@@ -995,42 +1409,61 @@ function nextExpenseImage() {
                 <a-button size="small" @click="weighRotation = (weighRotation + 90) % 360"><RotateRightOutlined /></a-button>
                 <span>{{ Math.round(weighZoom * 100) }}%</span>
               </div>
-              <div class="image-stage">
-                <img :src="currentWeigh.image" :style="{ transform: `scale(${weighZoom}) rotate(${weighRotation}deg)` }" alt="磅单原图" />
-                <div v-if="activeWeighBox" class="field-highlight" :style="boxStyle(activeWeighBox)">
-                  {{ activeWeighBox.label }}
+              <div class="single-document-stage">
+                <div class="weigh-image-title">
+                  <strong>原始照片：装货磅单 + 卸货磅单</strong>
+                  <span>{{ currentWeighPair.departure.date }} {{ currentWeighPair.departure.time }} / {{ currentWeighPair.arrival.date }} {{ currentWeighPair.arrival.time }}</span>
+                </div>
+                <div class="single-weigh-stage">
+                  <div class="single-weigh-canvas" :style="{ transform: `scale(${weighZoom}) rotate(${weighRotation}deg)` }">
+                    <img :src="currentWeighPair.departure.image" alt="磅单原始照片" />
+                    <template v-for="source in weighHighlightSources" :key="source">
+                      <div v-if="weighBoxForSource(source)" class="field-highlight" :class="source" :style="boxStyle(weighBoxForSource(source))">
+                        {{ source === 'departure' ? '装货' : '卸货' }} · {{ activeWeighField?.label }}
+                      </div>
+                      <div v-if="weighBoxForSource(source)" class="field-magnifier" :class="source" :style="weighMagnifierStyle(source)"></div>
+                    </template>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div class="form-pane">
+            <div class="form-pane paired-form-pane">
               <div class="form-head">
                 <div>
                   <strong>Agent 结构化结果</strong>
-                  <span>字段悬停可定位原图区域，支持财务改值后入库</span>
+                  <span>一张照片同时识别装货和卸货磅单，字段悬停可定位原图区域</span>
                 </div>
-                <a-tag color="cyan">{{ currentWeigh.source }}</a-tag>
+                <a-tag color="cyan">{{ currentWeighPair.departure.source }}</a-tag>
               </div>
-              <div class="field-table compact">
-                <div class="field-row header">
-                  <span>字段</span>
-                  <span>识别值 / 可编辑</span>
-                  <span>异常</span>
-                </div>
-                <div
-                  v-for="item in weighFields"
-                  :key="item.key"
-                  class="field-row"
-                  :class="{ active: activeFieldKey === item.key }"
-                  @pointerenter="activeFieldKey = item.key"
-                  @mouseover="activeFieldKey = item.key"
-                  @focusin="activeFieldKey = item.key"
-                  @mouseenter="activeFieldKey = item.key"
-                  @mouseleave="activeFieldKey = ''"
-                >
-                  <span>{{ item.label }}</span>
-                  <a-input :value="String(item.value)" size="small" @update:value="onWeighInput(item.key, $event)" />
-                  <span class="field-issue">{{ currentWeigh.anomalies.find((issue) => issue.includes(item.label.slice(0, 2))) || '-' }}</span>
+              <div class="pair-kpi-grid">
+                <div><span>装货净重</span><strong>{{ ton(currentWeighPair.departure.net) }}</strong></div>
+                <div><span>到货净重</span><strong>{{ ton(currentWeighPair.arrival.net) }}</strong></div>
+                <div><span>净重差</span><strong>{{ ton(Math.abs(currentWeighPair.departure.net - currentWeighPair.arrival.net)) }}</strong></div>
+              </div>
+              <div class="paired-field-groups">
+                <div v-for="group in weighFieldGroups" :key="group.title" class="field-group">
+                  <div class="field-group-title" :class="group.tone">
+                    <strong>{{ group.title }}</strong>
+                  </div>
+                  <div class="field-table compact paired-field-table">
+                    <div
+                      v-for="item in group.fields"
+                      :key="item.key"
+                      class="field-row"
+                      :class="{ active: activeFieldKey === item.key }"
+                      @pointerenter="activeFieldKey = item.key"
+                      @mouseover="activeFieldKey = item.key"
+                      @focusin="activeFieldKey = item.key"
+                      @mouseenter="activeFieldKey = item.key"
+                      @click="activeFieldKey = item.key"
+                      @mouseleave="activeFieldKey = ''"
+                    >
+                      <span>{{ item.label }}</span>
+                      <a-input :value="String(item.value)" size="small" :disabled="item.source === 'none'" @update:value="onWeighInput(item.key, $event)" />
+                      <span class="field-issue">{{ currentWeighPair.anomalies.find((issue) => issue.includes(item.label.slice(0, 2))) || '-' }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1055,16 +1488,18 @@ function nextExpenseImage() {
             <div class="metric-card green"><span>利润合计</span><strong>{{ money(weighListSummary.profit) }}</strong></div>
           </div>
           <div class="formula-strip">
-            <span>未识别字段按线路默认值入账</span>
-            <b>含税单价 {{ weighDefaults.taxableUnitPrice }} 元/吨</b>
-            <b>货物险 {{ money(weighDefaults.cargoInsurance) }}/趟</b>
-            <b>司机工资 {{ money(weighDefaults.driverSalary) }}/趟</b>
-            <b>税点 {{ Math.round(weighDefaults.taxRate * 100) }}%</b>
+            <span>本项目基本数值</span>
+            <b>含税单价 {{ selectedProjectBaseValues.taxableUnitPrice }} 元/吨</b>
+            <b>货物险 {{ money(selectedProjectBaseValues.cargoInsurance) }}/趟</b>
+            <b>司机工资 {{ money(selectedProjectBaseValues.driverSalary) }}/趟</b>
+            <b>税点 {{ Math.round(selectedProjectBaseValues.taxRate * 100) }}%</b>
             <span>含税产值 = 卸货吨位 × 含税单价；利润 = 含税产值 - 货物险 - 司机工资 - 税点</span>
+            <a-button size="small" @click="openBaseValuesModal">修改</a-button>
           </div>
           <div class="filter-bar">
-            <a-select v-model:value="selectedProjectId" @change="selectProject">
-              <a-select-option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</a-select-option>
+            <a-select v-model:value="weighRouteFilter" class="route-select">
+              <a-select-option value="全部线路">全部线路</a-select-option>
+              <a-select-option v-for="route in weighRouteOptions" :key="route.value" :value="route.value">{{ route.label }}（{{ route.count }}）</a-select-option>
             </a-select>
             <a-input v-model:value="weighKeyword" placeholder="搜索车号、司机、货物、客户、地点、单号" allow-clear>
               <template #prefix><SearchOutlined /></template>
@@ -1220,56 +1655,78 @@ function nextExpenseImage() {
             <div class="metric-card"><span>本月总成本</span><strong>{{ money(totalStats.cost) }}</strong></div>
             <div class="metric-card" :class="{ danger: totalStats.profit < 0 }"><span>本月毛利</span><strong>{{ money(totalStats.profit) }}</strong></div>
             <div class="metric-card"><span>平均单车利润</span><strong>{{ money(totalStats.profit / totalStats.vehicles) }}</strong></div>
-            <div class="metric-card orange"><span>待审核</span><strong>{{ totalStats.pendingWeigh + totalStats.pendingExpense }}</strong></div>
-            <div class="metric-card warning"><span>异常单据数</span><strong>{{ totalStats.issues }}</strong></div>
+            <div class="metric-card orange"><span>本月车次</span><strong>{{ totalStats.monthTrips }}</strong></div>
+            <div class="metric-card warning"><span>本月报销费用</span><strong>{{ money(totalStats.monthExpense) }}</strong></div>
           </div>
-          <div class="dashboard-grid">
-            <div class="chart-card wide">
-              <h3>每日利润趋势</h3>
-              <div class="trend-chart">
-                <div v-for="day in dailyProfitTrend" :key="day.day" class="trend-col">
-                  <div class="bar" :class="{ negative: day.profit < 0 }" :style="{ height: `${Math.max(8, (Math.abs(day.profit) / maxDailyProfit) * 150)}px` }"></div>
+          <div class="dashboard-layout">
+            <div class="chart-card trend-card">
+              <div class="chart-card-head">
+                <div>
+                  <h3>项目月利润趋势</h3>
+                  <span>选择项目查看 2026 年 6 月每日利润</span>
+                </div>
+                <a-select v-model:value="dashboardTrendProjectId" class="dashboard-project-select">
+                  <a-select-option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</a-select-option>
+                </a-select>
+              </div>
+              <div class="trend-chart monthly-trend-chart">
+                <div v-for="day in projectMonthlyProfitTrend" :key="day.day" class="trend-col monthly">
+                  <div class="bar" :class="{ negative: day.profit < 0 }" :style="{ height: `${Math.max(8, (Math.abs(day.profit) / maxProjectTrendProfit) * 150)}px` }"></div>
                   <span>{{ day.day }}</span>
                   <b>{{ money(day.profit) }}</b>
                 </div>
               </div>
             </div>
-            <div class="chart-card">
-              <h3>按车辆利润排名</h3>
-              <div v-for="vehicle in vehicleRank" :key="vehicle.id" class="rank-line" @click="goVehicle(vehicle.id)">
-                <span>{{ vehicle.plate }}</span>
-                <div class="rank-track"><i :class="{ negative: vehicle.profit < 0 }" :style="{ width: `${Math.max(6, (Math.abs(vehicle.profit) / maxVehicleProfit) * 100)}%` }"></i></div>
-                <b :class="{ danger: vehicle.profit < 0 }">{{ money(vehicle.profit) }}</b>
+
+            <div class="dashboard-analysis-grid">
+              <div class="chart-card vehicle-rank-card">
+                <div class="chart-card-head">
+                  <h3>本月车辆利润排名</h3>
+                  <span>{{ vehicleRank.length }} 辆</span>
+                </div>
+                <div class="rank-list">
+                  <div v-for="vehicle in vehicleRank" :key="vehicle.id" class="rank-line vehicle-rank-line" @click="goVehicle(vehicle.id)">
+                    <div class="rank-meta">
+                      <span>{{ vehicle.plate }}</span>
+                      <em>{{ projectName(vehicle.projectId) }} · {{ vehicle.driver }}</em>
+                    </div>
+                    <div class="rank-track"><i :class="{ negative: vehicle.profit < 0 }" :style="{ width: `${Math.max(6, (Math.abs(vehicle.profit) / maxVehicleProfit) * 100)}%` }"></i></div>
+                    <b :class="{ danger: vehicle.profit < 0 }">{{ money(vehicle.profit) }}</b>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="chart-card">
-              <h3>项目利润对比</h3>
-              <div v-for="project in projectProfitComparison" :key="project.name" class="summary-line">
-                <span>{{ project.name }}</span>
-                <b :class="{ danger: project.profit < 0 }">{{ money(project.profit) }}</b>
-              </div>
-            </div>
-            <div class="chart-card">
-              <h3>异常单据分布</h3>
-              <div class="issue-grid">
-                <div><strong>{{ weighRows.filter((item) => item.anomalies.includes('缺少到货单')).length }}</strong><span>缺少到货单</span></div>
-                <div><strong>{{ weighRows.filter((item) => item.anomalies.includes('疑似重复单')).length }}</strong><span>重复磅单</span></div>
-                <div><strong>{{ expenseRows.filter((item) => item.anomalies.includes('重复报销')).length }}</strong><span>重复报销</span></div>
-                <div><strong>{{ expenseRows.filter((item) => item.anomalies.includes('超预算')).length }}</strong><span>超预算</span></div>
-              </div>
-            </div>
-            <div class="chart-card">
-              <h3>按司机费用排名</h3>
-              <div v-for="driver in ['何明军', '罗明', '刘启', '李进', '王成']" :key="driver" class="summary-line">
-                <span>{{ driver }}</span>
-                <b>{{ money(expenseRows.filter((item) => item.driver === driver).reduce((sum, item) => sum + item.amount, 0)) }}</b>
-              </div>
-            </div>
-            <div class="chart-card">
-              <h3>费用类型占比</h3>
-              <div class="donut large"></div>
-              <div class="legend-row">
-                <span>油费</span><span>维修</span><span>路费</span><span>杂费</span>
+
+              <div class="dashboard-secondary-grid">
+                <div class="chart-card">
+                  <h3>项目利润对比</h3>
+                  <div v-for="project in projectProfitComparison" :key="project.name" class="summary-line">
+                    <span>{{ project.name }}</span>
+                    <b :class="{ danger: project.profit < 0 }">{{ money(project.profit) }}</b>
+                  </div>
+                </div>
+                <div class="chart-card">
+                  <h3>异常单据分布</h3>
+                  <div class="issue-grid">
+                    <div><strong>{{ weighRows.filter((item) => item.anomalies.includes('缺少到货单')).length }}</strong><span>缺少到货单</span></div>
+                    <div><strong>{{ weighRows.filter((item) => item.anomalies.includes('疑似重复单')).length }}</strong><span>重复磅单</span></div>
+                    <div><strong>{{ expenseRows.filter((item) => item.anomalies.includes('重复报销')).length }}</strong><span>重复报销</span></div>
+                    <div><strong>{{ expenseRows.filter((item) => item.anomalies.includes('超预算')).length }}</strong><span>超预算</span></div>
+                  </div>
+                </div>
+                <div class="chart-card">
+                  <h3>按司机费用排名</h3>
+                  <div v-for="driver in ['何明军', '罗明', '刘启', '李进', '王成']" :key="driver" class="summary-line">
+                    <span>{{ driver }}</span>
+                    <b>{{ money(expenseRows.filter((item) => item.driver === driver).reduce((sum, item) => sum + item.amount, 0)) }}</b>
+                  </div>
+                </div>
+                <div class="chart-card">
+                  <h3>费用类型占比</h3>
+                  <div class="donut large"></div>
+                  <div class="legend-row">
+                    <span>油费</span><span>维修</span><span>路费</span><span>杂费</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1377,7 +1834,7 @@ function nextExpenseImage() {
             <div v-for="project in projects" :key="project.id" class="project-overview" :class="{ active: project.id === selectedProjectId }" @click="selectProject(project.id)">
               <div>
                 <h3>{{ project.name }}</h3>
-                <a-badge :count="projectPendingTotal(project.id)" :number-style="{ backgroundColor: '#F77113' }" />
+                <a-badge v-if="projectPendingTotal(project.id) > 0" :count="projectPendingTotal(project.id)" :number-style="{ backgroundColor: '#F77113' }" />
               </div>
               <p>{{ project.route }}</p>
               <div class="project-overview-metrics">
@@ -1406,7 +1863,17 @@ function nextExpenseImage() {
         </section>
       </main>
 
-      <aside v-if="activePage !== 'weighList' && activePage !== 'vehicleDetail'" class="right-panel">
+      <aside
+        v-if="
+          activePage !== 'dashboard' &&
+          activePage !== 'weighList' &&
+          activePage !== 'vehicleDetail' &&
+          activePage !== 'weighAudit' &&
+          activePage !== 'expenseAudit' &&
+          (activePage !== 'agent' || agentRightPanelVisible)
+        "
+        class="right-panel"
+      >
         <template v-if="activePage === 'expenseList'">
           <div class="right-card">
             <span class="eyebrow">付款结构</span>
@@ -1445,26 +1912,54 @@ function nextExpenseImage() {
             </div>
           </div>
           <div class="right-card">
-            <h3>最近识别记录</h3>
-            <div v-for="item in projectStats.recent" :key="item.id" class="recent-item">
-              <div>
-                <strong>{{ 'vehiclePlate' in item ? item.vehiclePlate : '-' }}</strong>
-                <span>{{ 'goods' in item ? item.goods : item.type }}</span>
+            <h3>项目正在运营车辆</h3>
+            <div class="ops-vehicle-list">
+              <div v-for="vehicle in projectOperatingVehicles" :key="vehicle.id" class="ops-vehicle-row">
+                <div>
+                  <strong>{{ vehicle.plate }}</strong>
+                  <span>{{ vehicle.driver }} · {{ vehicle.location }}</span>
+                </div>
+                <a-tag :color="vehicle.workStatus === '在途' ? 'blue' : vehicle.workStatus === '卸货中' ? 'green' : vehicle.workStatus === '装货中' ? 'orange' : 'default'">
+                  {{ vehicle.workStatus }}
+                </a-tag>
+                <em>{{ vehicle.updatedAt }}</em>
               </div>
-              <a-tag :color="statusColor(item.auditStatus)">{{ item.auditStatus }}</a-tag>
             </div>
+            <p v-if="!projectOperatingVehicles.length" class="muted risk-empty">当前项目暂无正在运营车辆。</p>
           </div>
-          <div class="right-card checks">
-            <h3>自动校验规则</h3>
-            <div><CheckOutlined /> 出发 / 到货车牌一致</div>
-            <div><CheckOutlined /> 毛重皮重净重差异</div>
-            <div><CheckOutlined /> 缺失到货单</div>
-            <div><CheckOutlined /> 重复图片 / 重复报销</div>
-            <div><CheckOutlined /> 报销日期匹配行程</div>
-            <div><CheckOutlined /> 单车利润为负</div>
+          <div class="right-card ops-map-card">
+            <h3>实时位置概览</h3>
+            <div v-for="vehicle in projectOperatingVehicles.slice(0, 4)" :key="`${vehicle.id}-location`" class="location-line">
+              <div>
+                <strong>{{ vehicle.location }}</strong>
+                <span>{{ vehicle.plate }} / {{ vehicle.workStatus }}</span>
+              </div>
+              <i></i>
+            </div>
           </div>
         </template>
       </aside>
     </div>
+
+    <a-modal v-model:open="baseValuesModalVisible" title="修改本项目基本数值" width="520px" ok-text="保存" cancel-text="取消" @ok="saveBaseValues">
+      <div class="base-values-modal">
+        <label>
+          <span>含税单价</span>
+          <a-input-number :value="baseValuesDraft.taxableUnitPrice" :min="0" :precision="2" addon-after="元/吨" @update:value="updateBaseValueDraft('taxableUnitPrice', $event)" />
+        </label>
+        <label>
+          <span>货物险</span>
+          <a-input-number :value="baseValuesDraft.cargoInsurance" :min="0" :precision="2" addon-after="元/趟" @update:value="updateBaseValueDraft('cargoInsurance', $event)" />
+        </label>
+        <label>
+          <span>司机工资</span>
+          <a-input-number :value="baseValuesDraft.driverSalary" :min="0" :precision="2" addon-after="元/趟" @update:value="updateBaseValueDraft('driverSalary', $event)" />
+        </label>
+        <label>
+          <span>税点</span>
+          <a-input-number :value="baseValuesDraft.taxRatePercent" :min="0" :max="100" :precision="2" addon-after="%" @update:value="updateBaseValueDraft('taxRatePercent', $event)" />
+        </label>
+      </div>
+    </a-modal>
   </a-config-provider>
 </template>

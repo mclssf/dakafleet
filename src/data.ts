@@ -63,6 +63,42 @@ export const projects: Project[] = [
     pending: 5,
     profit: -1860,
     status: '异常'
+  },
+  {
+    id: 'p4',
+    name: '昭通电煤干线运输项目',
+    route: '客户：昭通能源集团｜线路：威信→昭通电厂、镇雄→水富码头、彝良→盐津储煤库',
+    vehicles: 6,
+    pending: 4,
+    profit: 31680,
+    status: '正常'
+  },
+  {
+    id: 'p5',
+    name: '黔西南水泥熟料配送项目',
+    route: '客户：黔西南海螺水泥｜线路：兴义熟料库→晴隆搅拌站、安龙粉磨站→册亨项目部',
+    vehicles: 6,
+    pending: 6,
+    profit: 28420,
+    status: '关注'
+  },
+  {
+    id: 'p6',
+    name: '滇中新能源矿粉转运项目',
+    route: '客户：滇中新材料科技｜线路：安宁中转仓→滇中新区工厂、嵩明矿粉库→昆明经开仓',
+    vehicles: 6,
+    pending: 2,
+    profit: 22790,
+    status: '正常'
+  },
+  {
+    id: 'p7',
+    name: '百色铝土矿短倒项目',
+    route: '客户：百色矿业集团｜线路：平果矿区→百色氧化铝厂、田阳堆场→田东码头',
+    vehicles: 6,
+    pending: 5,
+    profit: 17340,
+    status: '关注'
   }
 ];
 
@@ -96,7 +132,31 @@ export const vehicles: Vehicle[] = [
   { id: 'v27', plate: '桂L71908D', trailer: '桂L908挂', driver: '陆远', owner: '华银物流队', projectId: 'p3', status: '运营中', model: '新能源重卡' },
   { id: 'v28', plate: '粤B53619D', trailer: '桂L619挂', driver: '钟明', owner: '华银物流队', projectId: 'p3', status: '运营中', model: '新能源重卡' },
   { id: 'v29', plate: '桂L60935D', trailer: '桂L935挂', driver: '莫海亮', owner: '华银物流队', projectId: 'p3', status: '运营中', model: '燃油牵引车' },
-  { id: 'v30', plate: '粤B75028D', trailer: '桂L028挂', driver: '梁军', owner: '华银物流队', projectId: 'p3', status: '停运', model: '新能源重卡' }
+  { id: 'v30', plate: '粤B75028D', trailer: '桂L028挂', driver: '梁军', owner: '华银物流队', projectId: 'p3', status: '停运', model: '新能源重卡' },
+  { id: 'v31', plate: '云C60218D', trailer: '云C218挂', driver: '曹森', owner: '昭通顺联车队', projectId: 'p4', status: '运营中', model: '新能源重卡' },
+  { id: 'v32', plate: '云C71329D', trailer: '云C329挂', driver: '李勇康', owner: '昭通顺联车队', projectId: 'p4', status: '运营中', model: '燃油牵引车' },
+  { id: 'v33', plate: '云C80561D', trailer: '云C561挂', driver: '杨建波', owner: '昭通顺联车队', projectId: 'p4', status: '运营中', model: '新能源重卡' },
+  { id: 'v34', plate: '川A29416D', trailer: '川A416挂', driver: '周洪', owner: '昭通顺联车队', projectId: 'p4', status: '待检修', model: '燃油牵引车' },
+  { id: 'v35', plate: '贵A38172D', trailer: '贵A172挂', driver: '谭小平', owner: '昭通顺联车队', projectId: 'p4', status: '运营中', model: '新能源重卡' },
+  { id: 'v36', plate: '云C46620D', trailer: '云C620挂', driver: '赵兴', owner: '昭通顺联车队', projectId: 'p4', status: '运营中', model: '燃油牵引车' },
+  { id: 'v37', plate: '贵E11892D', trailer: '贵E892挂', driver: '黄俊杰', owner: '黔西南联运', projectId: 'p5', status: '运营中', model: '新能源重卡' },
+  { id: 'v38', plate: '贵E35077D', trailer: '贵E077挂', driver: '韦光明', owner: '黔西南联运', projectId: 'p5', status: '运营中', model: '燃油牵引车' },
+  { id: 'v39', plate: '云F72016D', trailer: '云F016挂', driver: '刘贵', owner: '黔西南联运', projectId: 'p5', status: '待检修', model: '燃油牵引车' },
+  { id: 'v40', plate: '桂L83520D', trailer: '桂L520挂', driver: '梁启文', owner: '黔西南联运', projectId: 'p5', status: '运营中', model: '新能源重卡' },
+  { id: 'v41', plate: '贵E50638D', trailer: '贵E638挂', driver: '陈东', owner: '黔西南联运', projectId: 'p5', status: '运营中', model: '新能源重卡' },
+  { id: 'v42', plate: '贵E92901D', trailer: '贵E901挂', driver: '王志', owner: '黔西南联运', projectId: 'p5', status: '运营中', model: '燃油牵引车' },
+  { id: 'v43', plate: '云A67318D', trailer: '云A318挂', driver: '沈立军', owner: '滇中新材料车队', projectId: 'p6', status: '运营中', model: '新能源重卡' },
+  { id: 'v44', plate: '云A42065D', trailer: '云A065挂', driver: '顾涛', owner: '滇中新材料车队', projectId: 'p6', status: '运营中', model: '新能源重卡' },
+  { id: 'v45', plate: '云D70619D', trailer: '云D619挂', driver: '方健', owner: '滇中新材料车队', projectId: 'p6', status: '运营中', model: '燃油牵引车' },
+  { id: 'v46', plate: '云A85126D', trailer: '云A126挂', driver: '马卫国', owner: '滇中新材料车队', projectId: 'p6', status: '待检修', model: '新能源重卡' },
+  { id: 'v47', plate: '云G90318D', trailer: '云G318挂', driver: '杜江', owner: '滇中新材料车队', projectId: 'p6', status: '运营中', model: '燃油牵引车' },
+  { id: 'v48', plate: '云A50627D', trailer: '云A627挂', driver: '秦凯', owner: '滇中新材料车队', projectId: 'p6', status: '运营中', model: '新能源重卡' },
+  { id: 'v49', plate: '桂L31670D', trailer: '桂L670挂', driver: '苏建华', owner: '百色矿业车队', projectId: 'p7', status: '运营中', model: '新能源重卡' },
+  { id: 'v50', plate: '桂L48293D', trailer: '桂L293挂', driver: '农伟', owner: '百色矿业车队', projectId: 'p7', status: '运营中', model: '燃油牵引车' },
+  { id: 'v51', plate: '粤B61827D', trailer: '桂L827挂', driver: '梁少杰', owner: '百色矿业车队', projectId: 'p7', status: '运营中', model: '新能源重卡' },
+  { id: 'v52', plate: '桂A72051D', trailer: '桂A051挂', driver: '蓝海', owner: '百色矿业车队', projectId: 'p7', status: '待检修', model: '燃油牵引车' },
+  { id: 'v53', plate: '桂L90516D', trailer: '桂L516挂', driver: '陆志强', owner: '百色矿业车队', projectId: 'p7', status: '运营中', model: '新能源重卡' },
+  { id: 'v54', plate: '粤B44029D', trailer: '桂L029挂', driver: '莫健', owner: '百色矿业车队', projectId: 'p7', status: '运营中', model: '燃油牵引车' }
 ];
 
 export const weighBills: WeighBill[] = [
@@ -935,7 +995,6 @@ export const quickPrompts = [
   '汇总本月每辆车利润',
   '检查赣J03528是否有缺失磅单',
   '查看司机罗明本月报销',
-  '生成本周财务对账摘要',
   '导出磅单汇总表',
   '导出付款明细表'
 ];
@@ -946,8 +1005,8 @@ export const initialAgentMessages: AgentMessage[] = [
     content: '我已接入微信群磅单、报销凭证和历史 Excel 汇总表。可以直接问我待审核、利润、异常、车辆明细或导出汇总。',
     skills: ['图片识别', '账务校验', '利润归因'],
     resultCards: [
-      { label: '待审核磅单', value: '8 单', tone: 'orange' },
-      { label: '待审核报销', value: '7 笔', tone: 'orange' },
+      { label: '待审核磅单', value: '8 单', tone: 'orange', action: 'weighAudit' },
+      { label: '待审核报销', value: '7 笔', tone: 'orange', action: 'expenseAudit' },
       { label: '异常提醒', value: '13 条', tone: 'red' }
     ]
   }

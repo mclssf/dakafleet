@@ -84,7 +84,7 @@ export interface AgentMessage {
   role: 'user' | 'agent';
   content: string;
   skills?: string[];
-  resultCards?: Array<{ label: string; value: string; tone?: 'green' | 'orange' | 'red' | 'blue' }>;
+  resultCards?: Array<{ label: string; value: string; tone?: 'green' | 'orange' | 'red' | 'blue'; action?: PageKey }>;
 }
 
 export type PageKey =
