@@ -83,6 +83,9 @@ export interface Expense {
 export interface AgentMessage {
   role: 'user' | 'agent';
   content: string;
+  intent?: string;
+  taskSteps?: string[];
+  streaming?: boolean;
   skills?: string[];
   resultCards?: Array<{ label: string; value: string; tone?: 'green' | 'orange' | 'red' | 'blue'; action?: PageKey }>;
 }

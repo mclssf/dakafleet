@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import {
   AuditOutlined,
   CarOutlined,
   CheckOutlined,
   CloseOutlined,
   DashboardOutlined,
+  DownOutlined,
   DownloadOutlined,
   FileSearchOutlined,
   LeftOutlined,
@@ -37,6 +38,7 @@ const selectedProjectId = ref(projects[0].id);
 const selectedVehicleId = ref(vehicles[0].id);
 const agentInput = ref('');
 const agentMessages = ref<AgentMessage[]>([...initialAgentMessages]);
+const chatStreamRef = ref<HTMLElement | null>(null);
 const weighRows = ref<WeighBill[]>(weighBills.map((item) => ({ ...item, anomalies: [...item.anomalies] })));
 const expenseRows = ref<Expense[]>(reimbursements.map((item) => ({ ...item, anomalies: [...item.anomalies], images: [...item.images] })));
 const bulkExpenseRows = ref<Expense[]>(buildBulkExpenseRows());
@@ -57,7 +59,28 @@ const projectMenuExpanded = ref(true);
 const agentRightPanelVisible = ref(true);
 const baseValuesModalVisible = ref(false);
 const dashboardTrendProjectId = ref(projects[0].id);
+const dashboardTrendMonth = ref('2026-06');
 const todayDate = '2026-06-30';
+
+interface AgentModelOption {
+  value: string;
+  label: string;
+  short: string;
+  hint: string;
+  tone: 'dark' | 'blue' | 'green' | 'orange';
+}
+
+const agentModelOptions: AgentModelOption[] = [
+  { value: 'auto', label: '自动', short: 'A', hint: '按任务自动选择', tone: 'dark' },
+  { value: 'fleet-pro', label: 'Fleet-Pro', short: 'F', hint: '账务审核与利润分析', tone: 'blue' },
+  { value: 'vision-ledger', label: 'Vision-Ledger', short: 'V', hint: '磅单和凭证图片识别', tone: 'green' },
+  { value: 'fast-audit', label: 'Fast-Audit', short: 'Q', hint: '快速连续审核', tone: 'orange' }
+];
+
+const selectedAgentModel = ref(agentModelOptions[0]);
+const isModelSelectOpen = ref(false);
+const modelSelectRef = ref<HTMLDivElement | null>(null);
+const agentStreamTimers: number[] = [];
 
 interface WeighBaseValues {
   taxableUnitPrice: number;
@@ -127,6 +150,7 @@ const projectNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
 ];
 
 const currentProject = computed(() => projects.find((project) => project.id === selectedProjectId.value) ?? projects[0]);
+const dashboardTrendProject = computed(() => projects.find((project) => project.id === dashboardTrendProjectId.value) ?? projects[0]);
 const selectedProjectBaseValues = computed(() => baseValuesForProject(selectedProjectId.value));
 const scopedWeighRows = computed(() => weighRows.value.filter((item) => item.projectId === selectedProjectId.value));
 const scopedExpenseRows = computed(() => expenseRows.value.filter((item) => item.projectId === selectedProjectId.value));
@@ -616,20 +640,35 @@ const expenseDriverSummary = computed(() => {
     .sort((a, b) => b.amount - a.amount);
 });
 
+const dashboardMonthOptions = [
+  { value: '2026-06', label: '2026年6月' },
+  { value: '2026-05', label: '2026年5月' },
+  { value: '2026-04', label: '2026年4月' }
+];
+
 const projectMonthlyProfitTrend = computed(() => {
   const projectId = dashboardTrendProjectId.value;
-  return Array.from({ length: 30 }, (_, index) => {
+  const month = dashboardTrendMonth.value;
+  const [year, monthValue] = month.split('-').map(Number);
+  const days = new Date(year, monthValue, 0).getDate();
+  const projectIndex = Math.max(0, projects.findIndex((project) => project.id === projectId));
+  return Array.from({ length: days }, (_, index) => {
     const dayNo = String(index + 1).padStart(2, '0');
-    const date = `2026-06-${dayNo}`;
+    const date = `${month}-${dayNo}`;
     const bills = pairedWeighRows.value.filter((item) => item.projectId === projectId && item.unloadingDate === date);
     const revenue = bills.reduce((sum, item) => sum + item.taxableOutput, 0);
     const billCost = bills.reduce((sum, item) => sum + item.cargoInsurance + item.driverSalary + item.taxPoint, 0);
     const expenseCost = allApprovedExpenseRows.value.filter((item) => item.projectId === projectId && item.occurredDate === date).reduce((sum, item) => sum + item.amount, 0);
-    return { day: `${dayNo}日`, profit: revenue - billCost - expenseCost };
+    const actualProfit = revenue - billCost - expenseCost;
+    const simulatedProfit =
+      actualProfit ||
+      Math.round((920 + projectIndex * 110 + (index % 6) * 95 - (index % 11 === 0 ? 760 : 0)) * (month === '2026-05' ? 0.92 : month === '2026-04' ? 0.84 : 1));
+    return { day: `${dayNo}日`, profit: simulatedProfit };
   });
 });
 
 const maxProjectTrendProfit = computed(() => Math.max(1, ...projectMonthlyProfitTrend.value.map((item) => Math.abs(item.profit))));
+const selectedProjectMonthlyProfit = computed(() => projectMonthlyProfitTrend.value.reduce((sum, item) => sum + item.profit, 0));
 
 const projectProfitComparison = computed(() =>
   projects.map((project) => {
@@ -1105,13 +1144,72 @@ function saveExpense() {
   message.success('报销修改已保存');
 }
 
+function selectAgentModel(option: AgentModelOption) {
+  selectedAgentModel.value = option;
+  isModelSelectOpen.value = false;
+}
+
+function closeModelSelectOnOutside(event: MouseEvent) {
+  if (!modelSelectRef.value?.contains(event.target as Node)) {
+    isModelSelectOpen.value = false;
+  }
+}
+
+function scrollChatToBottom() {
+  nextTick(() => {
+    const stream = chatStreamRef.value;
+    if (stream) stream.scrollTop = stream.scrollHeight;
+  });
+}
+
+function queueAgentStreamStep(callback: () => void, delay: number) {
+  const timer = window.setTimeout(() => {
+    callback();
+    scrollChatToBottom();
+  }, delay);
+  agentStreamTimers.push(timer);
+}
+
+function streamAgentReply(target: AgentMessage, reply: AgentMessage) {
+  target.streaming = true;
+  target.content = `正在使用 ${selectedAgentModel.value.label} 理解你的问题...`;
+  scrollChatToBottom();
+
+  queueAgentStreamStep(() => {
+    target.content = '正在识别业务意图，并判断需要联动的系统页面...';
+  }, 420);
+
+  queueAgentStreamStep(() => {
+    target.intent = reply.intent;
+  }, 820);
+
+  queueAgentStreamStep(() => {
+    target.content = '正在拆解任务，并读取当前项目账务数据...';
+    target.taskSteps = reply.taskSteps?.slice(0, 1);
+  }, 1240);
+
+  queueAgentStreamStep(() => {
+    target.taskSteps = reply.taskSteps;
+  }, 1680);
+
+  queueAgentStreamStep(() => {
+    target.content = reply.content;
+    target.skills = reply.skills;
+    target.resultCards = reply.resultCards;
+    target.streaming = false;
+  }, 2200);
+}
+
 function sendAgent(text?: string) {
   const content = (text ?? agentInput.value).trim();
   if (!content) return;
   agentMessages.value.push({ role: 'user', content });
   agentInput.value = '';
-  const reply = buildAgentReply(content);
-  agentMessages.value.push(reply);
+  const reply = buildAgentReply(content, { deferNavigation: true });
+  const stagedIndex = agentMessages.value.length;
+  agentMessages.value.push({ role: 'agent', content: '', streaming: true });
+  const stagedReply = agentMessages.value[stagedIndex];
+  if (stagedReply) streamAgentReply(stagedReply, reply);
 }
 
 function resultCardTarget(card: NonNullable<AgentMessage['resultCards']>[number]) {
@@ -1132,17 +1230,30 @@ function handleResultCardClick(card: NonNullable<AgentMessage['resultCards']>[nu
     const pending = expenseRows.value.find((item) => item.projectId === selectedProjectId.value && item.auditStatus === '待审核');
     if (pending) reviewExpenseIndex.value = expenseRows.value.findIndex((item) => item.id === pending.id);
   }
+  if (target === 'expenseList' && card.label.includes('罗明')) {
+    expenseKeyword.value = '罗明';
+  }
   activePage.value = target;
 }
 
-function buildAgentReply(content: string): AgentMessage {
+function agentProcess(intent: string, taskSteps: string[]) {
+  return { intent, taskSteps };
+}
+
+function buildAgentReply(content: string, options?: { deferNavigation?: boolean }): AgentMessage {
+  const shouldNavigate = !options?.deferNavigation;
   if (content.includes('今日') && content.includes('待审核') && content.includes('磅单')) {
-    activePage.value = 'weighAudit';
+    if (shouldNavigate) activePage.value = 'weighAudit';
     const pending = auditWeighPairs.value.filter((item) => item.projectId === selectedProjectId.value && item.status === '待审核');
     if (pending[0]) reviewWeighPairIndex.value = auditWeighPairs.value.findIndex((item) => item.id === pending[0].id);
     return {
       role: 'agent',
-      content: `已切换到磅单审核。当前项目有 ${pending.length} 张待审核磅单，其中 ${pending.filter((item) => item.anomalies.length).length} 张带异常提示。`,
+      content: `${shouldNavigate ? '已切换到磅单审核。' : '已找到当前项目待审核磅单。'}当前项目有 ${pending.length} 张待审核磅单，其中 ${pending.filter((item) => item.anomalies.length).length} 张带异常提示。${shouldNavigate ? '' : '点击下方卡片可进入审核页。'}`,
+      ...agentProcess('识别为财务的连续审核诉求，需要先聚焦当前项目，再定位今天仍未处理的磅单组。', [
+        '限定当前项目范围，并读取待审核磅单组队列',
+        '优先定位包含异常提示的记录，便于财务先处理风险单',
+        shouldNavigate ? '切换到磅单审核页，并定位第一条待审核记录' : '生成磅单审核入口，并预定位第一条待审核记录'
+      ]),
       skills: ['磅单识别队列', '异常校验'],
       resultCards: [
         { label: '待审核磅单', value: `${pending.length} 张`, tone: 'orange', action: 'weighAudit' },
@@ -1152,67 +1263,104 @@ function buildAgentReply(content: string): AgentMessage {
   }
   if (content.includes('赣J03528')) {
     const vehicle = vehicleFinance.value.find((item) => item.plate.includes('赣J03528'));
-    if (vehicle) goVehicle(vehicle.id);
+    if (vehicle) {
+      selectedVehicleId.value = vehicle.id;
+      selectedProjectId.value = vehicle.projectId;
+    }
+    if (vehicle && shouldNavigate) goVehicle(vehicle.id);
     return {
       role: 'agent',
-      content: `已打开赣J03528D车辆账目。该车本月收入 ${money(vehicle?.revenue ?? 0)}，成本 ${money(vehicle?.cost ?? 0)}，毛利 ${money(vehicle?.profit ?? 0)}。最近一趟磅单已匹配出发和到货，净重差 0.06 吨，未触发重量异常。`,
+      content: `${shouldNavigate ? '已打开赣J03528D车辆账目。' : '已完成赣J03528D车辆账目核查。'}该车本月收入 ${money(vehicle?.revenue ?? 0)}，成本 ${money(vehicle?.cost ?? 0)}，毛利 ${money(vehicle?.profit ?? 0)}。最近一趟磅单已匹配装货和卸货，净重差 0.06 吨，未触发重量异常。`,
+      ...agentProcess('识别为单车账目核查诉求，需要围绕赣J03528D检查磅单配对、费用和利润结果。', [
+        '匹配车牌赣J03528D，并进入车辆账目明细',
+        '汇总该车本月磅单收入、报销费用和运输成本',
+        '检查是否存在缺失到货磅单或异常净重差'
+      ]),
       skills: ['车辆利润计算', '磅单配对', '报销归集'],
       resultCards: [
-        { label: '收入', value: money(vehicle?.revenue ?? 0), tone: 'blue' },
-        { label: '成本', value: money(vehicle?.cost ?? 0), tone: 'orange' },
-        { label: '毛利', value: money(vehicle?.profit ?? 0), tone: (vehicle?.profit ?? 0) >= 0 ? 'green' : 'red' }
+        { label: '收入', value: money(vehicle?.revenue ?? 0), tone: 'blue', action: 'vehicleDetail' },
+        { label: '成本', value: money(vehicle?.cost ?? 0), tone: 'orange', action: 'vehicleDetail' },
+        { label: '毛利', value: money(vehicle?.profit ?? 0), tone: (vehicle?.profit ?? 0) >= 0 ? 'green' : 'red', action: 'vehicleDetail' }
       ]
     };
   }
   if (content.includes('每辆车利润') || content.includes('利润最高')) {
-    activePage.value = 'dashboard';
+    if (shouldNavigate) activePage.value = 'dashboard';
     const best = vehicleRank.value[0];
     const worst = vehicleRank.value[vehicleRank.value.length - 1];
     return {
       role: 'agent',
-      content: `已切换到总车队看板。本月利润最高车辆是 ${best.plate}，毛利 ${money(best.profit)}；需要关注 ${worst.plate}，当前毛利 ${money(worst.profit)}。`,
+      content: `${shouldNavigate ? '已切换到总车队看板。' : '已完成本月每辆车利润汇总。'}本月利润最高车辆是 ${best.plate}，毛利 ${money(best.profit)}；需要关注 ${worst.plate}，当前毛利 ${money(worst.profit)}。${shouldNavigate ? '' : '点击结果卡片可查看总车队看板。'}`,
+      ...agentProcess('识别为老板视角的经营排名诉求，需要跨项目比较所有车辆本月利润。', [
+        '聚合本月已审核磅单产值和已审核报销费用',
+        '按车辆计算收入、成本和毛利，并生成排名',
+        shouldNavigate ? '切换到总车队看板，突出利润最高和负利润风险车辆' : '生成总车队看板入口，突出利润最高和负利润风险车辆'
+      ]),
       skills: ['利润排名', '费用归因'],
       resultCards: [
-        { label: '利润最高', value: `${best.plate} ${money(best.profit)}`, tone: 'green' },
-        { label: '负利润风险', value: `${worst.plate} ${money(worst.profit)}`, tone: 'red' }
+        { label: '利润最高', value: `${best.plate} ${money(best.profit)}`, tone: 'green', action: 'dashboard' },
+        { label: '负利润风险', value: `${worst.plate} ${money(worst.profit)}`, tone: 'red', action: 'dashboard' }
       ]
     };
   }
   if (content.includes('罗明') && content.includes('报销')) {
-    activePage.value = 'expenseList';
-    expenseKeyword.value = '罗明';
+    if (shouldNavigate) {
+      activePage.value = 'expenseList';
+      expenseKeyword.value = '罗明';
+    }
     const rows = expenseRows.value.filter((item) => item.driver === '罗明');
     return {
       role: 'agent',
-      content: `已筛选司机罗明本月报销，共 ${rows.length} 笔，合计 ${money(rows.reduce((sum, item) => sum + item.amount, 0))}。其中 ${rows.filter((item) => item.auditStatus === '待审核').length} 笔待审核。`,
-      skills: ['付款明细检索', '司机费用汇总']
+      content: `${shouldNavigate ? '已筛选司机罗明本月报销。' : '已汇总司机罗明本月报销。'}共 ${rows.length} 笔，合计 ${money(rows.reduce((sum, item) => sum + item.amount, 0))}。其中 ${rows.filter((item) => item.auditStatus === '待审核').length} 笔待审核。${shouldNavigate ? '' : '点击结果卡片可进入付款明细。'}`,
+      ...agentProcess('识别为按司机核查报销明细的财务诉求，需要筛出罗明本月所有费用记录。', [
+        shouldNavigate ? '切换到付款明细页，并用司机姓名罗明作为筛选条件' : '生成付款明细入口，并预置司机罗明筛选条件',
+        '统计该司机本月报销笔数、金额和待审核数量',
+        '保留付款状态与费用类型，方便财务继续标记已付'
+      ]),
+      skills: ['付款明细检索', '司机费用汇总'],
+      resultCards: [{ label: '罗明报销', value: `${rows.length} 笔 ${money(rows.reduce((sum, item) => sum + item.amount, 0))}`, tone: 'blue', action: 'expenseList' }]
     };
   }
   if (content.includes('待审核报销')) {
-    activePage.value = 'expenseAudit';
+    if (shouldNavigate) activePage.value = 'expenseAudit';
     const pending = scopedExpenseRows.value.filter((item) => item.auditStatus === '待审核');
     if (pending[0]) reviewExpenseIndex.value = expenseRows.value.findIndex((item) => item.id === pending[0].id);
     return {
       role: 'agent',
-      content: `已进入报销审核队列。当前项目有 ${pending.length} 笔待审核报销，支持连续审核和字段定位高亮。`,
+      content: `${shouldNavigate ? '已进入报销审核队列。' : '已找到当前项目待审核报销。'}当前项目有 ${pending.length} 笔待审核报销，支持连续审核和字段定位高亮。${shouldNavigate ? '' : '点击下方卡片可进入审核页。'}`,
+      ...agentProcess('识别为财务报销审核诉求，需要进入凭证核验队列并定位待处理记录。', [
+        '限定当前项目范围，筛选待审核报销记录',
+        '定位第一笔待审核费用，保留图片凭证和结构化字段',
+        shouldNavigate ? '切换到报销审核页，支持连续审核' : '生成报销审核入口，支持连续审核'
+      ]),
       skills: ['报销识别队列', '凭证金额校验'],
       resultCards: [{ label: '待审核报销', value: `${pending.length} 笔`, tone: 'orange', action: 'expenseAudit' }]
     };
   }
   if (content.includes('导出磅单')) {
-    activePage.value = 'weighList';
+    if (shouldNavigate) activePage.value = 'weighList';
     return {
       role: 'agent',
       content: '已生成磅单汇总表预览，字段与历史 Excel 磅单 sheet 对齐。Demo 中导出动作已模拟完成。',
+      ...agentProcess('识别为导出磅单汇总诉求，需要先切到已审核磅单列表，再按当前筛选条件导出。', [
+        '切换到磅单列表页',
+        '保留当前项目、线路和搜索筛选条件',
+        '按 Excel 汇总表字段生成导出预览'
+      ]),
       skills: ['Excel字段映射', '汇总导出'],
       resultCards: [{ label: '可导出记录', value: `${filteredPairedWeighRows.value.length} 条`, tone: 'blue' }]
     };
   }
   if (content.includes('导出付款')) {
-    activePage.value = 'expenseList';
+    if (shouldNavigate) activePage.value = 'expenseList';
     return {
       role: 'agent',
       content: '已生成付款明细表预览，包含付款日期、费用类型、车牌、内容、金额、付款对象和支付状态。',
+      ...agentProcess('识别为导出付款明细诉求，需要按财务付款表口径汇总已审核费用。', [
+        '切换到付款明细页',
+        '读取当前项目的已审核费用和支付状态',
+        '按付款对象、司机、车辆和费用类型生成导出预览'
+      ]),
       skills: ['付款明细导出', '财务科目归集'],
       resultCards: [{ label: '可导出费用', value: `${filteredExpenseRows.value.length} 笔`, tone: 'blue' }]
     };
@@ -1220,6 +1368,11 @@ function buildAgentReply(content: string): AgentMessage {
   return {
     role: 'agent',
     content: '我已理解你的查询。可以继续指定车辆、司机、日期、项目或费用类型，我会联动到对应列表、审核队列或车辆账目页。',
+    ...agentProcess('识别为开放式账务查询，需要等待用户补充更明确的实体或时间范围。', [
+      '尝试识别车辆、司机、项目、日期和费用类型',
+      '如果条件不足，提示用户补充筛选范围',
+      '条件明确后联动到对应业务页面'
+    ]),
     skills: ['自然语言理解', '页面联动']
   };
 }
@@ -1227,6 +1380,27 @@ function buildAgentReply(content: string): AgentMessage {
 function nextExpenseImage() {
   expenseImageIndex.value = (expenseImageIndex.value + 1) % currentExpense.value.images.length;
 }
+
+watch(activePage, (page) => {
+  if (page === 'agent') scrollChatToBottom();
+});
+
+watch(
+  () => agentMessages.value.length,
+  () => {
+    if (activePage.value === 'agent') scrollChatToBottom();
+  }
+);
+
+onMounted(() => {
+  document.addEventListener('click', closeModelSelectOnOutside);
+  scrollChatToBottom();
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', closeModelSelectOnOutside);
+  agentStreamTimers.forEach((timer) => window.clearTimeout(timer));
+});
 </script>
 
 <template>
@@ -1341,11 +1515,27 @@ function nextExpenseImage() {
 
         <section v-if="activePage === 'agent'" class="content agent-layout">
           <div class="chat-panel">
-            <div class="chat-stream">
+            <div ref="chatStreamRef" class="chat-stream">
               <div v-for="(msg, index) in agentMessages" :key="index" class="chat-message" :class="msg.role">
                 <div class="avatar">{{ msg.role === 'agent' ? 'AI' : '我' }}</div>
                 <div class="bubble">
                   <p>{{ msg.content }}</p>
+                  <div v-if="msg.streaming" class="agent-typing">
+                    <i></i><i></i><i></i>
+                    <span>生成中</span>
+                  </div>
+                  <div v-if="msg.intent || msg.taskSteps?.length" class="agent-process">
+                    <div v-if="msg.intent" class="process-block">
+                      <span>意图理解</span>
+                      <strong>{{ msg.intent }}</strong>
+                    </div>
+                    <div v-if="msg.taskSteps?.length" class="process-block">
+                      <span>任务拆解</span>
+                      <ol>
+                        <li v-for="step in msg.taskSteps" :key="step">{{ step }}</li>
+                      </ol>
+                    </div>
+                  </div>
                   <div v-if="msg.skills?.length" class="skill-row">
                     <a-tag v-for="skill in msg.skills" :key="skill" color="blue">{{ skill }}</a-tag>
                   </div>
@@ -1379,7 +1569,41 @@ function nextExpenseImage() {
                   @keydown.enter.exact.prevent="sendAgent()"
                 />
                 <div class="composer-toolbar">
-                  <span>Enter 发送，Shift Enter 换行</span>
+                  <div ref="modelSelectRef" class="model-select">
+                    <button
+                      type="button"
+                      role="combobox"
+                      aria-haspopup="listbox"
+                      :aria-expanded="isModelSelectOpen"
+                      class="model-select-trigger"
+                      @click.stop="isModelSelectOpen = !isModelSelectOpen"
+                    >
+                      <span class="model-glyph" :class="selectedAgentModel.tone">{{ selectedAgentModel.short }}</span>
+                      <span class="model-label">{{ selectedAgentModel.label }}</span>
+                      <DownOutlined />
+                    </button>
+                    <div v-if="isModelSelectOpen" class="model-menu" role="listbox">
+                      <div class="model-menu-title">内置模型</div>
+                      <button
+                        v-for="option in agentModelOptions"
+                        :key="option.value"
+                        type="button"
+                        role="option"
+                        :aria-selected="selectedAgentModel.value === option.value"
+                        class="model-option"
+                        :class="{ active: selectedAgentModel.value === option.value }"
+                        @click="selectAgentModel(option)"
+                      >
+                        <span class="model-glyph" :class="option.tone">{{ option.short }}</span>
+                        <span>
+                          <strong>{{ option.label }}</strong>
+                          <em>{{ option.hint }}</em>
+                        </span>
+                        <CheckOutlined v-if="selectedAgentModel.value === option.value" />
+                      </button>
+                    </div>
+                  </div>
+                  <span class="composer-hint">Enter 发送，Shift Enter 换行</span>
                   <a-button type="primary" shape="circle" @click="sendAgent()">
                     <template #icon><MessageOutlined /></template>
                   </a-button>
@@ -1663,17 +1887,24 @@ function nextExpenseImage() {
               <div class="chart-card-head">
                 <div>
                   <h3>项目月利润趋势</h3>
-                  <span>选择项目查看 2026 年 6 月每日利润</span>
+                  <span>{{ dashboardTrendProject.name }} / {{ dashboardMonthOptions.find((item) => item.value === dashboardTrendMonth)?.label }} / 总利润 {{ money(selectedProjectMonthlyProfit) }}</span>
                 </div>
-                <a-select v-model:value="dashboardTrendProjectId" class="dashboard-project-select">
-                  <a-select-option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</a-select-option>
-                </a-select>
+                <div class="dashboard-trend-controls">
+                  <a-select v-model:value="dashboardTrendProjectId" class="dashboard-project-select">
+                    <a-select-option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</a-select-option>
+                  </a-select>
+                  <a-select v-model:value="dashboardTrendMonth" class="dashboard-month-select">
+                    <a-select-option v-for="month in dashboardMonthOptions" :key="month.value" :value="month.value">{{ month.label }}</a-select-option>
+                  </a-select>
+                </div>
               </div>
               <div class="trend-chart monthly-trend-chart">
                 <div v-for="day in projectMonthlyProfitTrend" :key="day.day" class="trend-col monthly">
-                  <div class="bar" :class="{ negative: day.profit < 0 }" :style="{ height: `${Math.max(8, (Math.abs(day.profit) / maxProjectTrendProfit) * 150)}px` }"></div>
+                  <div class="bar-wrap">
+                    <b>{{ money(day.profit) }}</b>
+                    <div class="bar" :class="{ negative: day.profit < 0 }" :style="{ height: `${Math.max(8, (Math.abs(day.profit) / maxProjectTrendProfit) * 150)}px` }"></div>
+                  </div>
                   <span>{{ day.day }}</span>
-                  <b>{{ money(day.profit) }}</b>
                 </div>
               </div>
             </div>

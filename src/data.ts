@@ -994,9 +994,7 @@ export const quickPrompts = [
   '查看今日待审核磅单',
   '汇总本月每辆车利润',
   '检查赣J03528是否有缺失磅单',
-  '查看司机罗明本月报销',
-  '导出磅单汇总表',
-  '导出付款明细表'
+  '查看司机罗明本月报销'
 ];
 
 export const initialAgentMessages: AgentMessage[] = [
