@@ -98,4 +98,6 @@ export type PageKey =
   | 'expenseList'
   | 'dashboard'
   | 'vehicleDetail'
-  | 'projects';
+  | 'projects'
+  | 'projectManage'
+  | 'agentOps';

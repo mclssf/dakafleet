@@ -8,20 +8,25 @@ import {
   DashboardOutlined,
   DownOutlined,
   DownloadOutlined,
+  EditOutlined,
   FileSearchOutlined,
   LeftOutlined,
   MessageOutlined,
+  PlusOutlined,
   ProjectOutlined,
   RightOutlined,
   RotateRightOutlined,
   SearchOutlined,
+  SettingOutlined,
   TableOutlined,
+  TeamOutlined,
   WalletOutlined,
   WarningOutlined,
   ZoomInOutlined,
   ZoomOutOutlined
 } from '@ant-design/icons-vue';
 import { message } from 'ant-design-vue';
+import AgentOpsPage from './AgentOpsPage.vue';
 import {
   expenseImages,
   initialAgentMessages,
@@ -31,10 +36,23 @@ import {
   vehicles,
   weighBills
 } from './data';
-import type { AgentMessage, AuditStatus, Expense, FieldBox, PageKey, WeighBill } from './types';
+import type { AgentMessage, AuditStatus, Expense, FieldBox, PageKey, Project, WeighBill } from './types';
 
-const activePage = ref<PageKey>('agent');
-const selectedProjectId = ref(projects[0].id);
+function pageFromPath(pathname: string): PageKey {
+  const cleanPath = pathname.replace(/\/$/, '');
+  if (cleanPath === '/agentops') return 'agentOps';
+  if (cleanPath === '/project-manage') return 'projectManage';
+  return 'agent';
+}
+
+function pathForPage(page: PageKey) {
+  if (page === 'projectManage') return '/project-manage';
+  return page === 'agentOps' ? '/agentops' : '/';
+}
+
+const activePage = ref<PageKey>(pageFromPath(window.location.pathname));
+const projectRows = ref<Project[]>(projects.map((project) => ({ ...project })));
+const selectedProjectId = ref(projectRows.value[0].id);
 const selectedVehicleId = ref(vehicles[0].id);
 const agentInput = ref('');
 const agentMessages = ref<AgentMessage[]>([...initialAgentMessages]);
@@ -58,7 +76,7 @@ const expenseKeyword = ref('');
 const projectMenuExpanded = ref(true);
 const agentRightPanelVisible = ref(true);
 const baseValuesModalVisible = ref(false);
-const dashboardTrendProjectId = ref(projects[0].id);
+const dashboardTrendProjectId = ref(projectRows.value[0].id);
 const dashboardTrendMonth = ref('2026-06');
 const todayDate = '2026-06-30';
 
@@ -105,7 +123,7 @@ const defaultBaseValues: WeighBaseValues = {
 
 const projectBaseValues = ref<Record<string, WeighBaseValues>>(
   Object.fromEntries(
-    projects.map((project, index) => [
+    projectRows.value.map((project, index) => [
       project.id,
       {
         taxableUnitPrice: defaultBaseValues.taxableUnitPrice + (index % 3) * 2,
@@ -132,7 +150,9 @@ const pageTitle: Record<PageKey, string> = {
   expenseList: '报销列表 / 付款明细',
   dashboard: '公司总车队看板',
   vehicleDetail: '车辆账目明细',
-  projects: '项目 / 车队管理'
+  projects: '项目 / 车队管理',
+  projectManage: '项目 / 车队管理',
+  agentOps: '智能体运营配置'
 };
 
 const companyNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
@@ -149,8 +169,223 @@ const projectNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
   { key: 'vehicleDetail', label: '车辆账目明细', icon: CarOutlined }
 ];
 
-const currentProject = computed(() => projects.find((project) => project.id === selectedProjectId.value) ?? projects[0]);
-const dashboardTrendProject = computed(() => projects.find((project) => project.id === dashboardTrendProjectId.value) ?? projects[0]);
+type ProjectEmployeeKind = 'TMS' | '微信群';
+type ProjectEditorTab = ProjectEmployeeKind | '技能';
+
+interface ProjectDataEmployee {
+  id: string;
+  kind: ProjectEmployeeKind;
+  name: string;
+  description: string;
+  status: '已启用' | '待验证' | '维护中';
+  updatedAt: string;
+  loginType?: string;
+  groups?: string[];
+}
+
+interface ProjectDataSourceConfig {
+  tmsEmployeeIds: string[];
+  wechatEmployeeIds: string[];
+  skillIds?: string[];
+  ownerIds?: string[];
+}
+
+interface ProjectSkillOption {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  requiresLogin: boolean;
+  icon: unknown;
+}
+
+interface ProjectOwnerOption {
+  id: string;
+  name: string;
+  role: string;
+  phone: string;
+}
+
+interface ProjectEditorForm {
+  name: string;
+  route: string;
+  customer: string;
+  ownerIds: string[];
+  tmsEmployeeIds: string[];
+  wechatEmployeeIds: string[];
+  skillIds: string[];
+}
+
+const projectEmployees = ref<ProjectDataEmployee[]>([
+  {
+    id: 'tms-yunzhi',
+    kind: 'TMS',
+    name: '云志合通 TMS 数据员工',
+    description: '同步运单、车辆、司机与调度状态，补齐 TMS 来源账务口径。',
+    status: '已启用',
+    updatedAt: '今天 08:40',
+    loginType: '图形验证码'
+  },
+  {
+    id: 'tms-qujing',
+    kind: 'TMS',
+    name: '曲靖捷运 TMS 数据员工',
+    description: '读取砂石配送项目调度任务、签收状态和客户计费数据。',
+    status: '已启用',
+    updatedAt: '07-02 15:18',
+    loginType: '短信验证码'
+  },
+  {
+    id: 'tms-huayin',
+    kind: 'TMS',
+    name: '华银物流 TMS 数据员工',
+    description: '接入氧化铝运输任务，匹配车牌、路线、结算周期和到货状态。',
+    status: '待验证',
+    updatedAt: '昨天 19:10',
+    loginType: '手机扫码'
+  },
+  {
+    id: 'wx-yunnan-weigh',
+    kind: '微信群',
+    name: '云南煤炭磅单微信群数据员工',
+    description: '识别磅单回传群和异常磅差复核群中的装卸货磅单图片。',
+    status: '已启用',
+    updatedAt: '今天 09:50',
+    groups: ['云南云志合通·磅单回传群', '云南煤炭储配项目·异常磅差复核群']
+  },
+  {
+    id: 'wx-qujing-expense',
+    kind: '微信群',
+    name: '曲靖砂石费用微信群数据员工',
+    description: '识别报销群、加油小票群中的金额、司机、车牌和付款对象。',
+    status: '已启用',
+    updatedAt: '昨天 20:10',
+    groups: ['曲靖城建砂石运输报销群', '曲靖城建砂石项目·加油小票群']
+  },
+  {
+    id: 'wx-huayin-fuel',
+    kind: '微信群',
+    name: '华银铝业加油对账数据员工',
+    description: '读取油站小票、升数、油费金额和项目归属。',
+    status: '已启用',
+    updatedAt: '今天 08:56',
+    groups: ['广西华银铝业加油对账群']
+  },
+  {
+    id: 'wx-zhaotong-energy',
+    kind: '微信群',
+    name: '昭通电煤补能微信群数据员工',
+    description: '识别充电账单、补能度数、等待时长和异常维修线索。',
+    status: '维护中',
+    updatedAt: '07-02 17:33',
+    groups: ['昭通能源电煤充电补能群']
+  },
+  {
+    id: 'wx-hailuo-repair',
+    kind: '微信群',
+    name: '海螺维修协同微信群数据员工',
+    description: '抽取维修项目、配件、工时、故障照片和付款对象。',
+    status: '待验证',
+    updatedAt: '昨天 18:21',
+    groups: ['黔西南海螺维修协同群']
+  },
+  {
+    id: 'wx-baise-toll',
+    kind: '微信群',
+    name: '百色矿业过路费微信群数据员工',
+    description: '识别 ETC 截图、高速通行费、路线说明和司机报销文本。',
+    status: '已启用',
+    updatedAt: '今天 07:35',
+    groups: ['百色矿业司机过路费群']
+  }
+]);
+
+const projectOwnerOptions: ProjectOwnerOption[] = [
+  { id: 'u-wumin', name: '伍敏通', role: '财务负责人', phone: '138****6241' },
+  { id: 'u-caocw', name: '曹财务', role: '财务审核', phone: '139****8712' },
+  { id: 'u-gaodiaodu', name: '高调度', role: '调度主管', phone: '136****3105' },
+  { id: 'u-zhoucw', name: '周财务', role: '项目会计', phone: '135****2098' },
+  { id: 'u-qinops', name: '秦运营', role: '运营经理', phone: '137****5266' },
+  { id: 'u-luaccount', name: '陆会计', role: '付款核算', phone: '188****7210' }
+];
+
+const projectSkillOptions: ProjectSkillOption[] = [
+  {
+    id: 'route-risk-expert',
+    name: '在途风险专家',
+    type: '物流专家',
+    description: '结合线路、时效和历史履约表现，识别高优先级在途风险。',
+    requiresLogin: false,
+    icon: WarningOutlined
+  },
+  {
+    id: 'gps-trace-expert',
+    name: '轨迹真实性专家',
+    type: '物流专家',
+    description: '分析轨迹断点、速度跳变和定位漂移，辅助判断 GPS 造假风险。',
+    requiresLogin: false,
+    icon: CarOutlined
+  },
+  {
+    id: 'parking-event-expert',
+    name: '异常停车专家',
+    type: '物流专家',
+    description: '识别服务区、物流园、中转仓等停靠点，区分合理休息和高风险长停。',
+    requiresLogin: false,
+    icon: AuditOutlined
+  },
+  {
+    id: 'delivery-sla-expert',
+    name: '到货时效专家',
+    type: '物流专家',
+    description: '评估预计到达时间、晚点风险和卸货超时，输出时效处置建议。',
+    requiresLogin: false,
+    icon: TableOutlined
+  },
+  {
+    id: 'weigh-ledger-expert',
+    name: '磅单账务专家',
+    type: '账务专家',
+    description: '检查装卸货磅单一致性，生成可入账字段和磅差提示。',
+    requiresLogin: false,
+    icon: FileSearchOutlined
+  },
+  {
+    id: 'expense-audit-expert',
+    name: '报销审核专家',
+    type: '账务专家',
+    description: '识别费用凭证、重复报销和超预算报销，辅助财务连续审核。',
+    requiresLogin: false,
+    icon: WalletOutlined
+  }
+];
+
+const projectDataSourceMap = ref<Record<string, ProjectDataSourceConfig>>({
+  p1: { tmsEmployeeIds: ['tms-yunzhi'], wechatEmployeeIds: ['wx-yunnan-weigh'], skillIds: ['route-risk-expert', 'weigh-ledger-expert'], ownerIds: ['u-wumin', 'u-gaodiaodu'] },
+  p2: { tmsEmployeeIds: ['tms-qujing'], wechatEmployeeIds: ['wx-qujing-expense'], skillIds: ['parking-event-expert', 'expense-audit-expert'], ownerIds: ['u-caocw'] },
+  p3: { tmsEmployeeIds: ['tms-huayin'], wechatEmployeeIds: ['wx-huayin-fuel'], skillIds: ['gps-trace-expert', 'expense-audit-expert'], ownerIds: ['u-qinops'] },
+  p4: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-zhaotong-energy'], skillIds: ['delivery-sla-expert', 'expense-audit-expert'], ownerIds: ['u-zhoucw'] },
+  p5: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-hailuo-repair'], skillIds: ['parking-event-expert'], ownerIds: ['u-gaodiaodu'] },
+  p6: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-yunnan-weigh', 'wx-huayin-fuel'], skillIds: ['gps-trace-expert', 'weigh-ledger-expert'], ownerIds: ['u-qinops', 'u-wumin'] },
+  p7: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-baise-toll'], skillIds: ['route-risk-expert', 'expense-audit-expert'], ownerIds: ['u-luaccount'] }
+});
+
+const projectEditorVisible = ref(false);
+const projectEditorMode = ref<'create' | 'edit'>('create');
+const projectEditorTab = ref<ProjectEditorTab>('TMS');
+const editingProjectId = ref('');
+const projectEditorForm = reactive<ProjectEditorForm>({
+  name: '',
+  route: '',
+  customer: '',
+  ownerIds: [],
+  tmsEmployeeIds: [],
+  wechatEmployeeIds: [],
+  skillIds: []
+});
+
+const currentProject = computed(() => projectRows.value.find((project) => project.id === selectedProjectId.value) ?? projectRows.value[0]);
+const dashboardTrendProject = computed(() => projectRows.value.find((project) => project.id === dashboardTrendProjectId.value) ?? projectRows.value[0]);
 const selectedProjectBaseValues = computed(() => baseValuesForProject(selectedProjectId.value));
 const scopedWeighRows = computed(() => weighRows.value.filter((item) => item.projectId === selectedProjectId.value));
 const scopedExpenseRows = computed(() => expenseRows.value.filter((item) => item.projectId === selectedProjectId.value));
@@ -199,6 +434,51 @@ const projectStats = computed(() => {
       .slice(0, 5)
   };
 });
+
+const tmsEmployees = computed(() => projectEmployees.value.filter((employee) => employee.kind === 'TMS'));
+const wechatEmployees = computed(() => projectEmployees.value.filter((employee) => employee.kind === '微信群'));
+
+const projectManagementRows = computed(() =>
+  projectRows.value.map((project) => {
+    const projectBills = pairedWeighRows.value.filter((item) => item.projectId === project.id);
+    const projectExpenses = allApprovedExpenseRows.value.filter((item) => item.projectId === project.id);
+    const projectVehicles = vehicles.filter((vehicle) => vehicle.projectId === project.id);
+    const monthBills = projectBills.filter((item) => item.unloadingDate.startsWith('2026-06'));
+    const monthExpenses = projectExpenses.filter((item) => item.occurredDate.startsWith('2026-06'));
+    const revenue = monthBills.reduce((sum, item) => sum + item.taxableOutput, 0);
+    const transportCost = monthBills.reduce((sum, item) => sum + item.cargoInsurance + item.driverSalary + item.taxPoint, 0);
+    const expenseCost = monthExpenses.reduce((sum, item) => sum + item.amount, 0);
+    const sourceConfig = projectDataSourceMap.value[project.id] ?? { tmsEmployeeIds: [], wechatEmployeeIds: [] };
+    return {
+      ...project,
+      vehicleCount: projectVehicles.length,
+      runningCount: projectVehicles.filter((vehicle) => vehicle.status === '运营中').length,
+      monthWeighCount: monthBills.length,
+      monthExpenseCount: monthExpenses.length,
+      pendingTotal: projectPendingTotal(project.id),
+      revenue,
+      cost: transportCost + expenseCost,
+      profit: revenue - transportCost - expenseCost,
+      tmsEmployees: sourceConfig.tmsEmployeeIds
+        .map((employeeId) => projectEmployees.value.find((employee) => employee.id === employeeId))
+        .filter((employee): employee is ProjectDataEmployee => Boolean(employee)),
+      wechatEmployees: sourceConfig.wechatEmployeeIds
+        .map((employeeId) => projectEmployees.value.find((employee) => employee.id === employeeId))
+        .filter((employee): employee is ProjectDataEmployee => Boolean(employee)),
+      skills: (sourceConfig.skillIds ?? []).map(skillById).filter((skill): skill is ProjectSkillOption => Boolean(skill)),
+      owners: (sourceConfig.ownerIds ?? []).map(ownerById).filter((owner): owner is ProjectOwnerOption => Boolean(owner))
+    };
+  })
+);
+
+const selectedProjectManagementRow = computed(() => projectManagementRows.value.find((project) => project.id === selectedProjectId.value) ?? projectManagementRows.value[0]);
+
+const projectManageSummary = computed(() => ({
+  projects: projectRows.value.length,
+  runningVehicles: vehicles.filter((vehicle) => vehicle.status === '运营中').length,
+  monthWeighCount: projectManagementRows.value.reduce((sum, item) => sum + item.monthWeighCount, 0),
+  monthProfit: projectManagementRows.value.reduce((sum, item) => sum + item.profit, 0)
+}));
 
 const vehicleFinance = computed(() =>
   vehicles.map((vehicle) => {
@@ -613,6 +893,9 @@ const expenseListSummary = computed(() => ({
 
 const vehicleRank = computed(() => [...vehicleFinance.value].sort((a, b) => b.profit - a.profit));
 const selectedProjectVehicles = computed(() => vehicles.filter((item) => item.projectId === selectedProjectId.value));
+const selectedProjectVehicleFinanceRows = computed(() =>
+  selectedProjectVehicles.value.map((vehicle) => vehicleFinance.value.find((item) => item.id === vehicle.id)).filter((item): item is NonNullable<typeof item> => Boolean(item))
+);
 const projectOperatingVehicles = computed(() =>
   selectedProjectVehicles.value
     .filter((vehicle) => vehicle.status === '运营中')
@@ -651,7 +934,7 @@ const projectMonthlyProfitTrend = computed(() => {
   const month = dashboardTrendMonth.value;
   const [year, monthValue] = month.split('-').map(Number);
   const days = new Date(year, monthValue, 0).getDate();
-  const projectIndex = Math.max(0, projects.findIndex((project) => project.id === projectId));
+  const projectIndex = Math.max(0, projectRows.value.findIndex((project) => project.id === projectId));
   return Array.from({ length: days }, (_, index) => {
     const dayNo = String(index + 1).padStart(2, '0');
     const date = `${month}-${dayNo}`;
@@ -671,7 +954,7 @@ const maxProjectTrendProfit = computed(() => Math.max(1, ...projectMonthlyProfit
 const selectedProjectMonthlyProfit = computed(() => projectMonthlyProfitTrend.value.reduce((sum, item) => sum + item.profit, 0));
 
 const projectProfitComparison = computed(() =>
-  projects.map((project) => {
+  projectRows.value.map((project) => {
     const bills = pairedWeighRows.value.filter((item) => item.projectId === project.id);
     const expenses = allApprovedExpenseRows.value.filter((item) => item.projectId === project.id);
     const revenue = bills.reduce((sum, item) => sum + item.taxableOutput, 0);
@@ -859,7 +1142,145 @@ function ton(value: number) {
 }
 
 function projectName(projectId: string) {
-  return projects.find((project) => project.id === projectId)?.name ?? '-';
+  return projectRows.value.find((project) => project.id === projectId)?.name ?? '-';
+}
+
+function employeeById(employeeId: string) {
+  return projectEmployees.value.find((employee) => employee.id === employeeId);
+}
+
+function skillById(skillId: string) {
+  return projectSkillOptions.find((skill) => skill.id === skillId);
+}
+
+function ownerById(ownerId: string) {
+  return projectOwnerOptions.find((owner) => owner.id === ownerId);
+}
+
+function employeeStatusColor(status: ProjectDataEmployee['status']) {
+  if (status === '已启用') return 'green';
+  if (status === '维护中') return 'orange';
+  return 'blue';
+}
+
+function resetProjectEditor() {
+  editingProjectId.value = '';
+  projectEditorTab.value = 'TMS';
+  projectEditorForm.name = '';
+  projectEditorForm.route = '';
+  projectEditorForm.customer = '';
+  projectEditorForm.ownerIds = [];
+  projectEditorForm.tmsEmployeeIds = [];
+  projectEditorForm.wechatEmployeeIds = [];
+  projectEditorForm.skillIds = ['route-risk-expert', 'gps-trace-expert', 'parking-event-expert'];
+}
+
+function openCreateProject() {
+  projectEditorMode.value = 'create';
+  resetProjectEditor();
+  projectEditorVisible.value = true;
+}
+
+function openEditProject(projectId: string) {
+  const project = projectRows.value.find((item) => item.id === projectId);
+  if (!project) return;
+  const sourceConfig = projectDataSourceMap.value[project.id] ?? { tmsEmployeeIds: [], wechatEmployeeIds: [] };
+  projectEditorMode.value = 'edit';
+  editingProjectId.value = project.id;
+  projectEditorTab.value = 'TMS';
+  projectEditorForm.name = project.name;
+  projectEditorForm.route = project.route;
+  projectEditorForm.customer = project.route.match(/客户：([^｜]+)/)?.[1] ?? '';
+  projectEditorForm.ownerIds = [...(sourceConfig.ownerIds ?? [])];
+  projectEditorForm.tmsEmployeeIds = [...sourceConfig.tmsEmployeeIds];
+  projectEditorForm.wechatEmployeeIds = [...sourceConfig.wechatEmployeeIds];
+  projectEditorForm.skillIds = [...(sourceConfig.skillIds ?? [])];
+  projectEditorVisible.value = true;
+}
+
+function closeProjectEditor() {
+  projectEditorVisible.value = false;
+  resetProjectEditor();
+}
+
+function selectTmsEmployee(employeeId: string) {
+  projectEditorForm.tmsEmployeeIds = projectEditorForm.tmsEmployeeIds.includes(employeeId) ? [] : [employeeId];
+}
+
+function toggleWechatEmployee(employeeId: string) {
+  if (projectEditorForm.wechatEmployeeIds.includes(employeeId)) {
+    projectEditorForm.wechatEmployeeIds = projectEditorForm.wechatEmployeeIds.filter((id) => id !== employeeId);
+    return;
+  }
+  projectEditorForm.wechatEmployeeIds = [...projectEditorForm.wechatEmployeeIds, employeeId];
+}
+
+function toggleProjectSkill(skillId: string) {
+  if (projectEditorForm.skillIds.includes(skillId)) {
+    projectEditorForm.skillIds = projectEditorForm.skillIds.filter((id) => id !== skillId);
+    return;
+  }
+  projectEditorForm.skillIds = [...projectEditorForm.skillIds, skillId];
+}
+
+function saveProjectEditor() {
+  const name = projectEditorForm.name.trim();
+  const route = projectEditorForm.route.trim();
+  if (!name) {
+    message.warning('请输入项目 / 车队名称');
+    return;
+  }
+  if (!route) {
+    message.warning('请输入项目线路或业务说明');
+    return;
+  }
+
+  if (projectEditorMode.value === 'edit') {
+    const projectId = editingProjectId.value;
+    projectRows.value = projectRows.value.map((project) => (project.id === projectId ? { ...project, name, route } : project));
+    projectDataSourceMap.value = {
+      ...projectDataSourceMap.value,
+      [projectId]: {
+        tmsEmployeeIds: [...projectEditorForm.tmsEmployeeIds],
+        wechatEmployeeIds: [...projectEditorForm.wechatEmployeeIds],
+        skillIds: [...projectEditorForm.skillIds],
+        ownerIds: [...projectEditorForm.ownerIds]
+      }
+    };
+    message.success('项目 / 车队配置已保存');
+    closeProjectEditor();
+    return;
+  }
+
+  const newProjectId = `p${Date.now()}`;
+  projectRows.value = [
+    {
+      id: newProjectId,
+      name,
+      route,
+      vehicles: 0,
+      pending: 0,
+      profit: 0,
+      status: '正常'
+    },
+    ...projectRows.value
+  ];
+  projectDataSourceMap.value = {
+    ...projectDataSourceMap.value,
+    [newProjectId]: {
+      tmsEmployeeIds: [...projectEditorForm.tmsEmployeeIds],
+      wechatEmployeeIds: [...projectEditorForm.wechatEmployeeIds],
+      skillIds: [...projectEditorForm.skillIds],
+      ownerIds: [...projectEditorForm.ownerIds]
+    }
+  };
+  projectBaseValues.value = {
+    ...projectBaseValues.value,
+    [newProjectId]: { ...defaultBaseValues }
+  };
+  selectedProjectId.value = newProjectId;
+  message.success('新项目 / 车队已创建');
+  closeProjectEditor();
 }
 
 function vehicleWorkStatus(index: number) {
@@ -989,6 +1410,17 @@ function handleSidebarProjectClick(projectId: string) {
 
 function navigate(page: PageKey) {
   activePage.value = page;
+}
+
+function syncBrowserPath(page: PageKey) {
+  const targetPath = pathForPage(page);
+  if (window.location.pathname !== targetPath) {
+    window.history.pushState({ page }, '', targetPath);
+  }
+}
+
+function handlePopState() {
+  activePage.value = pageFromPath(window.location.pathname);
 }
 
 function goWeighAudit(record?: WeighBill) {
@@ -1382,6 +1814,7 @@ function nextExpenseImage() {
 }
 
 watch(activePage, (page) => {
+  syncBrowserPath(page);
   if (page === 'agent') scrollChatToBottom();
 });
 
@@ -1394,11 +1827,14 @@ watch(
 
 onMounted(() => {
   document.addEventListener('click', closeModelSelectOnOutside);
+  window.addEventListener('popstate', handlePopState);
+  syncBrowserPath(activePage.value);
   scrollChatToBottom();
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', closeModelSelectOnOutside);
+  window.removeEventListener('popstate', handlePopState);
   agentStreamTimers.forEach((timer) => window.clearTimeout(timer));
 });
 </script>
@@ -1417,7 +1853,10 @@ onBeforeUnmount(() => {
       }
     }"
   >
+    <AgentOpsPage v-if="activePage === 'agentOps'" />
+
     <div
+      v-else
       class="app-shell"
       :class="{
         'no-right':
@@ -1426,6 +1865,8 @@ onBeforeUnmount(() => {
           activePage === 'vehicleDetail' ||
           activePage === 'weighAudit' ||
           activePage === 'expenseAudit' ||
+          activePage === 'projectManage' ||
+          activePage === 'projects' ||
           (activePage === 'agent' && !agentRightPanelVisible)
       }"
     >
@@ -1453,10 +1894,16 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="side-section project-section">
-          <div class="side-title">项目 / 车队</div>
+          <div class="side-title side-title-action">
+            <span>项目 / 车队</span>
+            <button type="button" :class="{ active: activePage === 'projectManage' }" @click="navigate('projectManage')">
+              <SettingOutlined />
+              管理
+            </button>
+          </div>
           <div class="project-list">
             <button
-              v-for="project in projects"
+              v-for="project in projectRows"
               :key="project.id"
               class="project-card"
               :class="{ active: activePage !== 'dashboard' && project.id === selectedProjectId }"
@@ -1469,6 +1916,10 @@ onBeforeUnmount(() => {
               <div class="project-card-metrics">
                 <span>{{ projectVehicleCount(project.id) }} 车</span>
                 <span :class="{ danger: projectProfitValue(project.id) < 0 }">{{ money(projectProfitValue(project.id)) }}</span>
+              </div>
+              <div class="project-card-foot">
+                <span>运营 {{ vehicles.filter((vehicle) => vehicle.projectId === project.id && vehicle.status === '运营中').length }}</span>
+                <span>待审 {{ projectPendingTotal(project.id) }}</span>
               </div>
             </button>
           </div>
@@ -1500,7 +1951,8 @@ onBeforeUnmount(() => {
       <main class="main-panel">
         <header class="topbar">
           <div>
-            <span v-if="activePage !== 'dashboard'" class="eyebrow">{{ currentProject.name }}</span>
+            <span v-if="activePage !== 'dashboard' && activePage !== 'projectManage'" class="eyebrow">{{ currentProject.name }}</span>
+            <span v-else-if="activePage === 'projectManage'" class="eyebrow">公司视角</span>
             <h1>{{ pageTitle[activePage] }}</h1>
           </div>
           <div class="topbar-actions">
@@ -1891,7 +2343,7 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="dashboard-trend-controls">
                   <a-select v-model:value="dashboardTrendProjectId" class="dashboard-project-select">
-                    <a-select-option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</a-select-option>
+                    <a-select-option v-for="project in projectRows" :key="project.id" :value="project.id">{{ project.name }}</a-select-option>
                   </a-select>
                   <a-select v-model:value="dashboardTrendMonth" class="dashboard-month-select">
                     <a-select-option v-for="month in dashboardMonthOptions" :key="month.value" :value="month.value">{{ month.label }}</a-select-option>
@@ -2060,37 +2512,341 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section v-else class="content project-screen">
-          <div class="metric-grid three">
-            <div v-for="project in projects" :key="project.id" class="project-overview" :class="{ active: project.id === selectedProjectId }" @click="selectProject(project.id)">
-              <div>
-                <h3>{{ project.name }}</h3>
-                <a-badge v-if="projectPendingTotal(project.id) > 0" :count="projectPendingTotal(project.id)" :number-style="{ backgroundColor: '#F77113' }" />
+        <section v-else-if="activePage === 'projectManage'" class="content project-manage-screen">
+          <div class="project-manage-layout">
+            <section class="manage-panel manage-table-panel">
+              <div class="manage-panel-head">
+                <div>
+                  <h3>项目列表</h3>
+                  <p>已去掉筛选条件、历史数据、连接和刷新动作，保留项目统计与配置入口。</p>
+                </div>
+                <div class="manage-panel-actions">
+                  <a-tag color="blue">{{ projectManagementRows.length }} 个项目</a-tag>
+                  <a-button type="primary" @click="openCreateProject">
+                    <template #icon><PlusOutlined /></template>
+                    新建项目 / 车队
+                  </a-button>
+                </div>
               </div>
-              <p>{{ project.route }}</p>
-              <div class="project-overview-metrics">
-                <span>{{ projectVehicleCount(project.id) }} 辆车</span>
-                <strong :class="{ danger: projectProfitValue(project.id) < 0 }">{{ money(projectProfitValue(project.id)) }}</strong>
+              <div class="project-manage-table-wrap">
+                <table class="project-manage-table">
+                  <thead>
+                    <tr>
+                      <th>项目 / 客户</th>
+                      <th>运营统计</th>
+                      <th>当前月账务</th>
+                      <th>数据员工</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="project in projectManagementRows" :key="project.id" :class="{ selected: project.id === selectedProjectId }" @click="selectProject(project.id)">
+                      <td>
+                        <strong>{{ project.name }}</strong>
+                        <span>{{ project.route }}</span>
+                      </td>
+                      <td>
+                        <div class="manage-stat-inline">
+                          <b>{{ project.runningCount }}/{{ project.vehicleCount }}</b>
+                          <span>运营车辆</span>
+                        </div>
+                        <div class="manage-stat-inline">
+                          <b>{{ project.monthWeighCount }}</b>
+                          <span>当前月磅单</span>
+                        </div>
+                      </td>
+                      <td>
+                        <strong :class="{ danger: project.profit < 0 }">{{ money(project.profit) }}</strong>
+                        <span>收入 {{ money(project.revenue) }} · 费用 {{ money(project.cost) }}</span>
+                      </td>
+                      <td>
+                        <div class="employee-mini-row">
+                          <span><TeamOutlined /> TMS {{ project.tmsEmployees.length }}</span>
+                          <span><MessageOutlined /> 微信群 {{ project.wechatEmployees.length }}</span>
+                        </div>
+                        <em v-if="project.pendingTotal > 0">待审核 {{ project.pendingTotal }} 条</em>
+                        <em v-else>暂无待审核</em>
+                      </td>
+                      <td>
+                        <div class="table-actions">
+                          <a-button size="small" @click.stop="openEditProject(project.id)">
+                            <template #icon><EditOutlined /></template>
+                            编辑
+                          </a-button>
+                          <a-button size="small" @click.stop="openProjectWorkbench(project.id)">工作台</a-button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
-            </div>
+            </section>
+
+            <Teleport to=".main-panel">
+              <section v-if="activePage === 'projectManage' && projectEditorVisible" class="project-create-overlay">
+                <div class="manage-panel project-create-panel project-create-panel-full">
+              <div class="project-create-header">
+                <div>
+                  <span class="create-icon"><PlusOutlined /></span>
+                  <h3>{{ projectEditorMode === 'edit' ? '编辑项目 / 车队' : '新建项目 / 车队' }}</h3>
+                </div>
+                <a-button size="small" @click="closeProjectEditor">取消</a-button>
+              </div>
+
+              <div class="project-create-body">
+                <section class="create-basic-section">
+                  <label>
+                    <span>项目名称</span>
+                    <div class="create-name-input">
+                      <a-input v-model:value="projectEditorForm.name" placeholder="请输入项目名称，不超过20个汉字" :maxlength="20" />
+                      <em>{{ Array.from(projectEditorForm.name).length }}/20</em>
+                    </div>
+                  </label>
+                  <div class="create-basic-grid">
+                    <label>
+                      <span>客户名称</span>
+                      <a-input v-model:value="projectEditorForm.customer" placeholder="例如：广西德保电厂" />
+                    </label>
+                    <label>
+                      <span>运营负责人</span>
+                      <a-select
+                        v-model:value="projectEditorForm.ownerIds"
+                        mode="multiple"
+                        show-search
+                        option-filter-prop="label"
+                        placeholder="搜索并选择负责人，可多选"
+                      >
+                        <a-select-option v-for="owner in projectOwnerOptions" :key="owner.id" :value="owner.id" :label="`${owner.name} ${owner.role} ${owner.phone}`">
+                          {{ owner.name }} · {{ owner.role }} · {{ owner.phone }}
+                        </a-select-option>
+                      </a-select>
+                    </label>
+                    <label class="wide">
+                      <span>项目线路 / 业务说明</span>
+                      <a-textarea
+                        v-model:value="projectEditorForm.route"
+                        :auto-size="{ minRows: 2, maxRows: 4 }"
+                        placeholder="例如：客户：广西德保电厂｜线路：砚山储配站→广西德保电厂、砚山储配站→靖西中转库"
+                      />
+                    </label>
+                  </div>
+                </section>
+
+                <section class="create-skill-section">
+                  <div class="create-skill-head">
+                    <div>
+                      <h3>选择技能</h3>
+                      <span>数据员工与业务专家平行配置，创建后用于项目识别、审核和账务分析。</span>
+                    </div>
+                    <b>已选 {{ projectEditorForm.tmsEmployeeIds.length + projectEditorForm.wechatEmployeeIds.length + projectEditorForm.skillIds.length }} 项</b>
+                  </div>
+
+                  <div class="employee-tabs create-tabs">
+                    <button type="button" :class="{ active: projectEditorTab === 'TMS' }" @click="projectEditorTab = 'TMS'">
+                      数据员工（TMS）
+                      <b>{{ projectEditorForm.tmsEmployeeIds.length }}</b>
+                    </button>
+                    <button type="button" :class="{ active: projectEditorTab === '微信群' }" @click="projectEditorTab = '微信群'">
+                      数据员工（微信群）
+                      <b>{{ projectEditorForm.wechatEmployeeIds.length }}</b>
+                    </button>
+                    <button type="button" :class="{ active: projectEditorTab === '技能' }" @click="projectEditorTab = '技能'">
+                      选择技能
+                      <b>{{ projectEditorForm.skillIds.length }}</b>
+                    </button>
+                  </div>
+
+                  <div v-if="projectEditorTab === 'TMS'" class="employee-choice-list create-choice-list">
+                    <button
+                      v-for="employee in tmsEmployees"
+                      :key="employee.id"
+                      type="button"
+                      class="employee-choice-card"
+                      :class="{ selected: projectEditorForm.tmsEmployeeIds.includes(employee.id) }"
+                      @click="selectTmsEmployee(employee.id)"
+                    >
+                      <span class="employee-choice-icon"><TeamOutlined /></span>
+                      <span class="choice-main">
+                        <strong>{{ employee.name }}</strong>
+                        <em>{{ employee.description }}</em>
+                        <i>登录方式：{{ employee.loginType }} · {{ employee.updatedAt }}</i>
+                      </span>
+                      <span class="choice-check" :class="{ selected: projectEditorForm.tmsEmployeeIds.includes(employee.id) }">
+                        <CheckOutlined />
+                      </span>
+                      <span class="choice-meta">
+                        <span>数据员工（TMS）</span>
+                        <span>{{ employee.loginType ? '需登录' : '无' }}</span>
+                        <span>{{ projectEditorForm.tmsEmployeeIds.includes(employee.id) ? '已选择' : '未选择' }}</span>
+                      </span>
+                    </button>
+                  </div>
+
+                  <div v-else-if="projectEditorTab === '微信群'" class="employee-choice-list create-choice-list">
+                    <button
+                      v-for="employee in wechatEmployees"
+                      :key="employee.id"
+                      type="button"
+                      class="employee-choice-card"
+                      :class="{ selected: projectEditorForm.wechatEmployeeIds.includes(employee.id) }"
+                      @click="toggleWechatEmployee(employee.id)"
+                    >
+                      <span class="employee-choice-icon wechat"><MessageOutlined /></span>
+                      <span class="choice-main">
+                        <strong>{{ employee.name }}</strong>
+                        <em>{{ employee.description }}</em>
+                        <i>{{ employee.groups?.join('、') }}</i>
+                      </span>
+                      <span class="choice-check" :class="{ selected: projectEditorForm.wechatEmployeeIds.includes(employee.id) }">
+                        <CheckOutlined />
+                      </span>
+                      <span class="choice-meta">
+                        <span>数据员工（微信群）</span>
+                        <span>多群接入</span>
+                        <span>{{ projectEditorForm.wechatEmployeeIds.includes(employee.id) ? '已选择' : '未选择' }}</span>
+                      </span>
+                    </button>
+                  </div>
+
+                  <div v-else class="employee-choice-list create-choice-list skill-choice-list">
+                    <button
+                      v-for="skill in projectSkillOptions"
+                      :key="skill.id"
+                      type="button"
+                      class="employee-choice-card skill-choice-card"
+                      :class="{ selected: projectEditorForm.skillIds.includes(skill.id) }"
+                      @click="toggleProjectSkill(skill.id)"
+                    >
+                      <span class="employee-choice-icon skill"><component :is="skill.icon" /></span>
+                      <span class="choice-main">
+                        <strong>{{ skill.name }}</strong>
+                        <em>{{ skill.description }}</em>
+                        <i>{{ skill.type }} · {{ skill.requiresLogin ? '需登录授权' : '无需登录' }}</i>
+                      </span>
+                      <span class="choice-check" :class="{ selected: projectEditorForm.skillIds.includes(skill.id) }">
+                        <CheckOutlined />
+                      </span>
+                      <span class="choice-meta">
+                        <span>{{ skill.type }}</span>
+                        <span>{{ skill.requiresLogin ? '需登录' : '无' }}</span>
+                        <span>{{ projectEditorForm.skillIds.includes(skill.id) ? '已选择' : '未选择' }}</span>
+                      </span>
+                    </button>
+                  </div>
+
+                  <div class="create-selected-footer">
+                    <span>
+                      {{
+                        [
+                          ...projectEditorForm.tmsEmployeeIds.map((id) => employeeById(id)?.name).filter(Boolean),
+                          ...projectEditorForm.wechatEmployeeIds.map((id) => employeeById(id)?.name).filter(Boolean),
+                          ...projectEditorForm.skillIds.map((id) => skillById(id)?.name).filter(Boolean)
+                        ].join('、') || '请选择数据员工或技能'
+                      }}
+                    </span>
+                    <a-button type="primary" @click="saveProjectEditor">{{ projectEditorMode === 'edit' ? '保存修改' : '完成创建' }}</a-button>
+                  </div>
+                </section>
+              </div>
+                </div>
+              </section>
+            </Teleport>
+
+            <aside v-if="selectedProjectManagementRow" class="manage-panel project-profile-panel">
+              <div class="manage-panel-head compact">
+                <div>
+                  <h3>{{ selectedProjectManagementRow.name }}</h3>
+                  <p>{{ selectedProjectManagementRow.route }}</p>
+                </div>
+                <a-button size="small" @click="openEditProject(selectedProjectManagementRow.id)">编辑</a-button>
+              </div>
+              <div class="profile-stat-grid">
+                <div><span>运营车辆</span><strong>{{ selectedProjectManagementRow.runningCount }}</strong></div>
+                <div><span>当前月磅单</span><strong>{{ selectedProjectManagementRow.monthWeighCount }}</strong></div>
+                <div><span>当前月费用</span><strong>{{ money(selectedProjectManagementRow.cost) }}</strong></div>
+                <div><span>当前月利润</span><strong :class="{ danger: selectedProjectManagementRow.profit < 0 }">{{ money(selectedProjectManagementRow.profit) }}</strong></div>
+              </div>
+              <div class="profile-source-section">
+                <h4>数据员工（TMS）</h4>
+                <div v-if="selectedProjectManagementRow.tmsEmployees.length" class="source-card-list">
+                  <div v-for="employee in selectedProjectManagementRow.tmsEmployees" :key="employee.id" class="source-card">
+                    <strong>{{ employee.name }}</strong>
+                    <span>{{ employee.description }}</span>
+                    <a-tag :color="employeeStatusColor(employee.status)">{{ employee.status }}</a-tag>
+                  </div>
+                </div>
+                <p v-else class="muted">暂未绑定 TMS 数据员工。</p>
+              </div>
+              <div class="profile-source-section">
+                <h4>数据员工（微信群）</h4>
+                <div v-if="selectedProjectManagementRow.wechatEmployees.length" class="source-card-list">
+                  <div v-for="employee in selectedProjectManagementRow.wechatEmployees" :key="employee.id" class="source-card">
+                    <strong>{{ employee.name }}</strong>
+                    <span>{{ employee.groups?.join('、') }}</span>
+                    <a-tag :color="employeeStatusColor(employee.status)">{{ employee.status }}</a-tag>
+                  </div>
+                </div>
+                <p v-else class="muted">暂未绑定微信群数据员工。</p>
+              </div>
+            </aside>
           </div>
-          <a-table
-            size="small"
-            :columns="vehicleColumns"
-            :data-source="selectedProjectVehicles.map((vehicle) => vehicleFinance.find((item) => item.id === vehicle.id))"
-            :pagination="{ pageSize: 8 }"
-            :scroll="{ x: 880 }"
-            row-key="id"
-            class="dense-table"
-          >
-            <template #bodyCell="{ column, record }">
-              <template v-if="column.dataIndex === 'projectId'">{{ projectName(record.projectId) }}</template>
-              <template v-else-if="column.dataIndex === 'revenue' || column.dataIndex === 'cost' || column.dataIndex === 'profit'">
-                <span :class="{ danger: column.dataIndex === 'profit' && record.profit < 0 }">{{ money(record[column.dataIndex]) }}</span>
-              </template>
-              <template v-else-if="column.dataIndex === 'action'"><a-button size="small" @click="goVehicle(record.id)">账目</a-button></template>
-            </template>
-          </a-table>
+        </section>
+
+        <section v-else class="content project-screen refined-project-screen">
+          <div class="project-kpi-row">
+            <div><span>项目总数</span><strong>{{ projectRows.length }}</strong></div>
+            <div><span>当前项目运营车辆</span><strong>{{ selectedProjectManagementRow?.runningCount ?? 0 }}</strong></div>
+            <div><span>当前月磅单</span><strong>{{ selectedProjectManagementRow?.monthWeighCount ?? 0 }}</strong></div>
+            <div :class="{ danger: (selectedProjectManagementRow?.profit ?? 0) < 0 }"><span>当前月利润</span><strong>{{ money(selectedProjectManagementRow?.profit ?? 0) }}</strong></div>
+          </div>
+
+          <div class="project-operations-layout">
+            <aside class="project-index-panel">
+              <div class="project-index-head">
+                <h3>项目索引</h3>
+                <span>{{ projectRows.length }} 个</span>
+              </div>
+              <button
+                v-for="project in projectManagementRows"
+                :key="project.id"
+                class="project-index-row"
+                :class="{ active: project.id === selectedProjectId }"
+                @click="selectProject(project.id)"
+              >
+                <div>
+                  <strong>{{ project.name }}</strong>
+                  <span>{{ project.runningCount }} 车运营 · {{ project.monthWeighCount }} 张磅单</span>
+                </div>
+                <b :class="{ danger: project.profit < 0 }">{{ money(project.profit) }}</b>
+              </button>
+            </aside>
+
+            <section class="project-detail-card">
+              <div class="project-detail-head">
+                <div>
+                  <h3>{{ currentProject.name }}</h3>
+                  <p>{{ currentProject.route }}</p>
+                </div>
+              </div>
+              <a-table
+                size="small"
+                :columns="vehicleColumns"
+                :data-source="selectedProjectVehicleFinanceRows"
+                :pagination="false"
+                :scroll="{ x: 1040, y: 'calc(100vh - 292px)' }"
+                row-key="id"
+                class="dense-table project-vehicle-table"
+              >
+                <template #bodyCell="{ column, record }">
+                  <template v-if="column.dataIndex === 'projectId'">{{ projectName(record.projectId) }}</template>
+                  <template v-else-if="column.dataIndex === 'revenue' || column.dataIndex === 'cost' || column.dataIndex === 'profit'">
+                    <span :class="{ danger: column.dataIndex === 'profit' && record.profit < 0 }">{{ money(record[column.dataIndex]) }}</span>
+                  </template>
+                  <template v-else-if="column.dataIndex === 'action'"><a-button size="small" @click="goVehicle(record.id)">账目</a-button></template>
+                </template>
+              </a-table>
+            </section>
+          </div>
         </section>
       </main>
 
@@ -2101,6 +2857,8 @@ onBeforeUnmount(() => {
           activePage !== 'vehicleDetail' &&
           activePage !== 'weighAudit' &&
           activePage !== 'expenseAudit' &&
+          activePage !== 'projectManage' &&
+          activePage !== 'projects' &&
           (activePage !== 'agent' || agentRightPanelVisible)
         "
         class="right-panel"
