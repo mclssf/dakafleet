@@ -38,19 +38,41 @@ import {
 } from './data';
 import type { AgentMessage, AuditStatus, Expense, FieldBox, PageKey, Project, WeighBill } from './types';
 
-function pageFromPath(pathname: string): PageKey {
-  const cleanPath = pathname.replace(/\/$/, '');
-  if (cleanPath === '/agentops') return 'agentOps';
-  if (cleanPath === '/project-manage') return 'projectManage';
+const pageHashMap: Record<PageKey, string> = {
+  agent: '#/',
+  weighAudit: '#/weigh-audit',
+  weighList: '#/weigh-list',
+  expenseAudit: '#/expense-audit',
+  expenseList: '#/expense-list',
+  dashboard: '#/dashboard',
+  vehicleDetail: '#/vehicle-detail',
+  projects: '#/projects',
+  projectManage: '#/project-manage',
+  agentOps: '#/agentops'
+};
+
+const pageByRoute = Object.fromEntries(Object.entries(pageHashMap).map(([page, hash]) => [hash.replace(/^#/, ''), page])) as Record<string, PageKey>;
+
+function normalizeRoute(route: string) {
+  const cleanRoute = route.replace(/^#/, '').replace(/\/$/, '');
+  return cleanRoute || '/';
+}
+
+function pageFromLocation(): PageKey {
+  const hashRoute = normalizeRoute(window.location.hash);
+  if (window.location.hash && pageByRoute[hashRoute]) return pageByRoute[hashRoute];
+
+  const legacyPath = normalizeRoute(`/${window.location.pathname.split('/').filter(Boolean).pop() ?? ''}`);
+  if (pageByRoute[legacyPath]) return pageByRoute[legacyPath];
+
   return 'agent';
 }
 
-function pathForPage(page: PageKey) {
-  if (page === 'projectManage') return '/project-manage';
-  return page === 'agentOps' ? '/agentops' : '/';
+function hashForPage(page: PageKey) {
+  return pageHashMap[page] ?? '#/';
 }
 
-const activePage = ref<PageKey>(pageFromPath(window.location.pathname));
+const activePage = ref<PageKey>(pageFromLocation());
 const projectRows = ref<Project[]>(projects.map((project) => ({ ...project })));
 const selectedProjectId = ref(projectRows.value[0].id);
 const selectedVehicleId = ref(vehicles[0].id);
@@ -1412,15 +1434,15 @@ function navigate(page: PageKey) {
   activePage.value = page;
 }
 
-function syncBrowserPath(page: PageKey) {
-  const targetPath = pathForPage(page);
-  if (window.location.pathname !== targetPath) {
-    window.history.pushState({ page }, '', targetPath);
+function syncBrowserHash(page: PageKey) {
+  const targetHash = hashForPage(page);
+  if (window.location.hash !== targetHash) {
+    window.history.pushState({ page }, '', targetHash);
   }
 }
 
-function handlePopState() {
-  activePage.value = pageFromPath(window.location.pathname);
+function handleRouteChange() {
+  activePage.value = pageFromLocation();
 }
 
 function goWeighAudit(record?: WeighBill) {
@@ -1814,7 +1836,7 @@ function nextExpenseImage() {
 }
 
 watch(activePage, (page) => {
-  syncBrowserPath(page);
+  syncBrowserHash(page);
   if (page === 'agent') scrollChatToBottom();
 });
 
@@ -1827,14 +1849,16 @@ watch(
 
 onMounted(() => {
   document.addEventListener('click', closeModelSelectOnOutside);
-  window.addEventListener('popstate', handlePopState);
-  syncBrowserPath(activePage.value);
+  window.addEventListener('popstate', handleRouteChange);
+  window.addEventListener('hashchange', handleRouteChange);
+  syncBrowserHash(activePage.value);
   scrollChatToBottom();
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', closeModelSelectOnOutside);
-  window.removeEventListener('popstate', handlePopState);
+  window.removeEventListener('popstate', handleRouteChange);
+  window.removeEventListener('hashchange', handleRouteChange);
   agentStreamTimers.forEach((timer) => window.clearTimeout(timer));
 });
 </script>
