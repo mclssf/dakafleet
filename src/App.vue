@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import {
+  AimOutlined,
   AuditOutlined,
   CarOutlined,
   CheckOutlined,
+  ThunderboltOutlined,
+  ToolOutlined,
   CloseOutlined,
   DashboardOutlined,
   DownOutlined,
@@ -27,6 +30,9 @@ import {
 } from '@ant-design/icons-vue';
 import { message } from 'ant-design-vue';
 import AgentOpsPage from './AgentOpsPage.vue';
+import ChargingDetailPage from './ChargingDetailPage.vue';
+import MaintenanceDetailPage from './MaintenanceDetailPage.vue';
+import TireExpensePage from './TireExpensePage.vue';
 import {
   expenseImages,
   initialAgentMessages,
@@ -44,6 +50,9 @@ const pageHashMap: Record<PageKey, string> = {
   weighList: '#/weigh-list',
   expenseAudit: '#/expense-audit',
   expenseList: '#/expense-list',
+  chargingDetail: '#/charging-detail',
+  maintenanceDetail: '#/maintenance-detail',
+  tireExpense: '#/tire-expense',
   dashboard: '#/dashboard',
   vehicleDetail: '#/vehicle-detail',
   projects: '#/projects',
@@ -170,6 +179,9 @@ const pageTitle: Record<PageKey, string> = {
   weighList: '磅单列表',
   expenseAudit: '报销审核',
   expenseList: '报销列表 / 付款明细',
+  chargingDetail: '充电明细',
+  maintenanceDetail: '维修费用',
+  tireExpense: '轮胎费用',
   dashboard: '公司总车队看板',
   vehicleDetail: '车辆账目明细',
   projects: '项目 / 车队管理',
@@ -188,6 +200,9 @@ const projectNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
   { key: 'weighList', label: '磅单列表', icon: TableOutlined },
   { key: 'expenseAudit', label: '报销审核', icon: FileSearchOutlined },
   { key: 'expenseList', label: '付款明细', icon: WalletOutlined },
+  { key: 'chargingDetail', label: '充电明细', icon: ThunderboltOutlined },
+  { key: 'maintenanceDetail', label: '维修费用', icon: ToolOutlined },
+  { key: 'tireExpense', label: '轮胎费用', icon: AimOutlined },
   { key: 'vehicleDetail', label: '车辆账目明细', icon: CarOutlined }
 ];
 
@@ -1889,6 +1904,9 @@ onBeforeUnmount(() => {
           activePage === 'vehicleDetail' ||
           activePage === 'weighAudit' ||
           activePage === 'expenseAudit' ||
+          activePage === 'chargingDetail' ||
+          activePage === 'maintenanceDetail' ||
+          activePage === 'tireExpense' ||
           activePage === 'projectManage' ||
           activePage === 'projects' ||
           (activePage === 'agent' && !agentRightPanelVisible)
@@ -2346,6 +2364,10 @@ onBeforeUnmount(() => {
             </template>
           </a-table>
         </section>
+
+        <ChargingDetailPage v-else-if="activePage === 'chargingDetail'" />
+        <MaintenanceDetailPage v-else-if="activePage === 'maintenanceDetail'" />
+        <TireExpensePage v-else-if="activePage === 'tireExpense'" />
 
         <section v-else-if="activePage === 'dashboard'" class="content dashboard-screen">
           <div class="metric-grid four">
@@ -2881,6 +2903,9 @@ onBeforeUnmount(() => {
           activePage !== 'vehicleDetail' &&
           activePage !== 'weighAudit' &&
           activePage !== 'expenseAudit' &&
+          activePage !== 'chargingDetail' &&
+          activePage !== 'maintenanceDetail' &&
+          activePage !== 'tireExpense' &&
           activePage !== 'projectManage' &&
           activePage !== 'projects' &&
           (activePage !== 'agent' || agentRightPanelVisible)
