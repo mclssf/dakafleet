@@ -96,8 +96,97 @@ export type PageKey =
   | 'weighList'
   | 'expenseAudit'
   | 'expenseList'
+  | 'chargingDetail'
+  | 'maintenanceDetail'
+  | 'tireExpense'
   | 'dashboard'
   | 'vehicleDetail'
   | 'projects'
   | 'projectManage'
   | 'agentOps';
+
+export type RecordDataSource = 'payment_sync' | 'upstream_import' | 'manual' | 'wechat_robot' | 'table_import' | 'image_ocr';
+
+export interface ChargingRecord {
+  id: string;
+  dataSource: RecordDataSource;
+  sourceRefId: string | null;
+  date: string;
+  vehiclePlate: string;
+  startSOC: number | null;
+  endSOC: number | null;
+  chargingKwh: number | null;
+  normalKwh: number | null;
+  batteryCapacity: number;
+  kwhDiff: number | null;
+  diffRatioPercent: number | null;
+  startTime: string | null;
+  endTime: string | null;
+  unitPrice: number | null;
+  serviceFee: number | null;
+  topUpAmount: number | null;
+  totalAmount: number | null;
+  balance: number | null;
+  odometer: number | null;
+  chargingStation: string;
+  remark: string;
+  isComplete: boolean;
+  status: string;
+  createdAt: string;
+}
+
+export type MaintenanceCategory =
+  | '维修费-轮胎'
+  | '维修费-底盘'
+  | '维修费-刹车'
+  | '维修费-货箱'
+  | '维修费-电路'
+  | '维修费-液压'
+  | '维修费-电焊'
+  | '维修费-大修'
+  | '维修费-施救'
+  | '维修费-耗材'
+  | '维修费-工时'
+  | '维修费-其他';
+
+export interface MaintenanceRecord {
+  id: string;
+  dataSource: RecordDataSource;
+  sourceRefId: string | null;
+  date: string;
+  vendor: string;
+  vehiclePlate: string;
+  description: string;
+  amount: number;
+  paymentDate: string | null;
+  remark: string;
+  period: string;
+  category: MaintenanceCategory;
+  reviewStatus: 'pending' | 'approved';
+  images: string[];
+  createdAt: string;
+}
+
+export type TirePosition = 'FL' | 'FR' | 'RL' | 'RR' | 'SPARE' | null;
+
+export interface TireRecord {
+  id: string;
+  dataSource: RecordDataSource;
+  sourceRefId: string | null;
+  date: string;
+  vendor: string;
+  vehiclePlatePrefix: string;
+  vehiclePlate: string;
+  tirePosition: TirePosition;
+  quantity: number;
+  unitPrice: number;
+  totalAmount: number;
+  tireNumber: string | null;
+  remark: string;
+  receiptNo: string | null;
+  images: string[];
+  paymentDate: string | null;
+  paymentStatus: '已付' | '未付' | '财务已付款';
+  tireNumberPending: boolean;
+  createdAt: string;
+}
