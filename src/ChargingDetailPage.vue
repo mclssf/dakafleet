@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
-import { DownloadOutlined, ImportOutlined, PlusOutlined, SearchOutlined, DeleteOutlined, EditOutlined, EyeOutlined } from '@ant-design/icons-vue';
+import { DownloadOutlined, ImportOutlined, PlusOutlined, SearchOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons-vue';
 import { Modal, message } from 'ant-design-vue';
 import type { ChargingRecord, RecordDataSource } from './types';
 
@@ -15,26 +15,9 @@ const sourceLabels: Record<RecordDataSource, string> = {
   image_ocr: '图片识别'
 };
 
-// 计算衍生字段（正常电数、电量差异、单价、电量差异占比）
-function recompute(r: ChargingRecord) {
-  const complete = r.startSOC != null && r.endSOC != null && r.chargingKwh != null;
-  r.isComplete = complete;
-  if (!complete) {
-    r.normalKwh = null;
-    r.kwhDiff = null;
-    r.unitPrice = null;
-    r.diffRatioPercent = null;
-    return;
-  }
-  const cap = r.batteryCapacity || DEFAULT_CAPACITY;
-  r.normalKwh = Number((((r.endSOC! - r.startSOC!) / 100) * cap).toFixed(2));
-  r.kwhDiff = Number(((r.chargingKwh as number) - r.normalKwh).toFixed(2));
-  r.unitPrice = r.chargingKwh ? Number(((r.totalAmount ?? 0) / r.chargingKwh).toFixed(2)) : null;
-  r.diffRatioPercent = r.chargingKwh ? Number((((r.kwhDiff as number) / r.chargingKwh) * 100).toFixed(2)) : null;
-}
-
+// 0.1 版本：暂不支持自动计算，仅保存原始录入字段
 function make(partial: Partial<ChargingRecord>): ChargingRecord {
-  const r: ChargingRecord = {
+  return {
     id: partial.id ?? `CR_${Math.round(Math.random() * 1e9)}`,
     dataSource: partial.dataSource ?? 'manual',
     sourceRefId: partial.sourceRefId ?? null,
@@ -61,8 +44,6 @@ function make(partial: Partial<ChargingRecord>): ChargingRecord {
     status: 'active',
     createdAt: partial.createdAt ?? '2026-06-14T08:30:00'
   };
-  recompute(r);
-  return r;
 }
 
 const seed: Partial<ChargingRecord>[] = [
@@ -110,36 +91,33 @@ const stats = computed(() => {
   const rows = filtered.value;
   const totalKwh = rows.reduce((s, r) => s + (r.chargingKwh ?? 0), 0);
   const totalAmount = rows.reduce((s, r) => s + (r.totalAmount ?? 0), 0);
-  const abnormal = rows.filter((r) => r.diffRatioPercent != null && Math.abs(r.diffRatioPercent) > 5).length;
+  const missing = rows.filter((r) => r.startSOC == null || r.endSOC == null).length;
   return {
     count: rows.length,
     totalKwh: totalKwh.toFixed(1),
     totalAmount,
     avgPrice: totalKwh ? (totalAmount / totalKwh).toFixed(2) : '—',
-    abnormal
+    missing
   };
 });
 
 const columns = [
   { title: '日期', dataIndex: 'date', width: 96, sorter: (a: ChargingRecord, b: ChargingRecord) => a.date.localeCompare(b.date) },
   { title: '车牌', dataIndex: 'vehiclePlate', width: 96 },
+  { title: '来源', dataIndex: 'source', width: 118 },
   { title: '开始SOC', dataIndex: 'startSOC', width: 88, sorter: (a: ChargingRecord, b: ChargingRecord) => (a.startSOC ?? 0) - (b.startSOC ?? 0) },
   { title: '结束SOC', dataIndex: 'endSOC', width: 88, sorter: (a: ChargingRecord, b: ChargingRecord) => (a.endSOC ?? 0) - (b.endSOC ?? 0) },
   { title: '充电度数', dataIndex: 'chargingKwh', width: 100, sorter: (a: ChargingRecord, b: ChargingRecord) => (a.chargingKwh ?? 0) - (b.chargingKwh ?? 0) },
-  { title: '正常电数', dataIndex: 'normalKwh', width: 100 },
-  { title: '电量差异', dataIndex: 'kwhDiff', width: 100, sorter: (a: ChargingRecord, b: ChargingRecord) => (a.kwhDiff ?? 0) - (b.kwhDiff ?? 0) },
   { title: '开始时间', dataIndex: 'startTime', width: 92 },
   { title: '结束时间', dataIndex: 'endTime', width: 92 },
-  { title: '单价', dataIndex: 'unitPrice', width: 80 },
   { title: '服务费', dataIndex: 'serviceFee', width: 88 },
   { title: '充值', dataIndex: 'topUpAmount', width: 88 },
   { title: '充电金额', dataIndex: 'totalAmount', width: 104, sorter: (a: ChargingRecord, b: ChargingRecord) => (a.totalAmount ?? 0) - (b.totalAmount ?? 0) },
   { title: '余额', dataIndex: 'balance', width: 88 },
   { title: '公里数', dataIndex: 'odometer', width: 88 },
   { title: '充电地址', dataIndex: 'chargingStation', width: 180 },
-  { title: '电量差异占比', dataIndex: 'diffRatioPercent', width: 118, sorter: (a: ChargingRecord, b: ChargingRecord) => (a.diffRatioPercent ?? 0) - (b.diffRatioPercent ?? 0) },
   { title: '备注', dataIndex: 'remark', width: 160 },
-  { title: '操作', dataIndex: 'action', fixed: 'right', width: 150 }
+  { title: '操作', dataIndex: 'action', fixed: 'right', width: 120 }
 ];
 
 function dt(v: string) {
@@ -148,13 +126,6 @@ function dt(v: string) {
 }
 function num(v: number | null, suffix = '') {
   return v == null ? '—' : `${v}${suffix}`;
-}
-function rowClassName(r: ChargingRecord) {
-  if (!r.isComplete) return 'row-incomplete';
-  const ratio = Math.abs(r.diffRatioPercent ?? 0);
-  if (ratio > 10) return 'row-danger';
-  if (ratio > 5) return 'row-warn';
-  return '';
 }
 
 function startEdit(r: ChargingRecord) {
@@ -174,9 +145,8 @@ function saveEdit(r: ChargingRecord) {
   r.vehiclePlate = editDraft.vehiclePlate ?? r.vehiclePlate;
   r.chargingStation = editDraft.chargingStation ?? r.chargingStation;
   r.remark = editDraft.remark ?? r.remark;
-  recompute(r);
   editingId.value = '';
-  message.success('已保存并重新计算');
+  message.success('已保存');
 }
 function removeRow(r: ChargingRecord) {
   Modal.confirm({
@@ -191,11 +161,8 @@ function removeRow(r: ChargingRecord) {
     }
   });
 }
-function viewSource(r: ChargingRecord) {
-  Modal.info({
-    title: '数据来源',
-    content: `来源类型：${sourceLabels[r.dataSource]}${r.sourceRefId ? `\n关联单据：${r.sourceRefId}` : ''}${r.dataSource === 'payment_sync' ? '\n来自付款明细同步记录' : ''}`
-  });
+function viewSourceLabel(r: ChargingRecord) {
+  return sourceLabels[r.dataSource];
 }
 
 function batchDelete() {
@@ -233,7 +200,7 @@ function saveAdd() {
   }
   records.value = [make({ ...addForm, dataSource: 'manual', id: `CR_${Math.round(Math.random() * 1e9)}` }), ...records.value];
   addVisible.value = false;
-  message.success('已手动添加并自动计算衍生字段');
+  message.success('已手动添加');
 }
 </script>
 
@@ -253,12 +220,12 @@ function saveAdd() {
       <div class="metric-card"><span>总充电度数</span><strong>{{ stats.totalKwh }} kWh</strong></div>
       <div class="metric-card"><span>总充电金额</span><strong>¥{{ stats.totalAmount.toLocaleString() }}</strong></div>
       <div class="metric-card"><span>平均单价</span><strong>¥{{ stats.avgPrice }} 元/kWh</strong></div>
-      <div class="metric-card orange"><span>异常电量笔数</span><strong>{{ stats.abnormal }}</strong></div>
+      <div class="metric-card orange"><span>待补充SOC笔数</span><strong>{{ stats.missing }}</strong></div>
     </div>
 
     <div class="filter-bar">
       <a-range-picker v-model:value="dateRange" value-format="YYYY-MM-DD" />
-      <a-input v-model:value="keyword" placeholder="搜索车牌、加油站地址、备注..." allow-clear>
+      <a-input v-model:value="keyword" placeholder="搜索车牌、充电地址、备注..." allow-clear>
         <template #prefix><SearchOutlined /></template>
       </a-input>
       <a-select v-model:value="sourceFilter" style="width: 100%">
@@ -274,10 +241,9 @@ function saveAdd() {
       :columns="columns"
       :data-source="filtered"
       :pagination="{ pageSize: 10 }"
-      :scroll="{ x: 2100 }"
+      :scroll="{ x: 1760 }"
       row-key="id"
       class="dense-table"
-      :row-class-name="(record: ChargingRecord) => rowClassName(record)"
       :row-selection="{ selectedRowKeys, onChange: (keys: any) => (selectedRowKeys = keys) }"
     >
       <template #bodyCell="{ column, record }">
@@ -285,15 +251,10 @@ function saveAdd() {
           <a-input v-model:value="editDraft[column.dataIndex]" size="small" />
         </template>
         <template v-else-if="column.dataIndex === 'date'">{{ dt(record.date) }}</template>
+        <template v-else-if="column.dataIndex === 'source'"><a-tag color="blue">{{ viewSourceLabel(record) }}</a-tag></template>
         <template v-else-if="column.dataIndex === 'startSOC'">{{ num(record.startSOC, '%') }}</template>
         <template v-else-if="column.dataIndex === 'endSOC'">{{ num(record.endSOC, '%') }}</template>
-        <template v-else-if="column.dataIndex === 'diffRatioPercent'">
-          <span :class="{ 'blue-text': (record.kwhDiff ?? 0) < 0 }">{{ record.diffRatioPercent == null ? '—' : record.diffRatioPercent + '%' }}</span>
-        </template>
-        <template v-else-if="column.dataIndex === 'kwhDiff'">
-          <span :class="{ 'blue-text': (record.kwhDiff ?? 0) < 0 }">{{ num(record.kwhDiff) }}</span>
-        </template>
-        <template v-else-if="['normalKwh','unitPrice','serviceFee','topUpAmount','totalAmount','balance','odometer','chargingKwh','startTime','endTime'].includes(column.dataIndex)">
+        <template v-else-if="['serviceFee','topUpAmount','totalAmount','balance','odometer','chargingKwh','startTime','endTime'].includes(column.dataIndex)">
           {{ num(record[column.dataIndex]) }}
         </template>
         <template v-else-if="column.dataIndex === 'action'">
@@ -304,7 +265,6 @@ function saveAdd() {
           <template v-else>
             <a-button size="small" @click="startEdit(record)"><template #icon><EditOutlined /></template></a-button>
             <a-button size="small" danger @click="removeRow(record)"><template #icon><DeleteOutlined /></template></a-button>
-            <a-button size="small" @click="viewSource(record)"><template #icon><EyeOutlined /></template></a-button>
           </template>
         </template>
       </template>

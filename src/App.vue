@@ -29,6 +29,7 @@ import {
   ZoomOutOutlined
 } from '@ant-design/icons-vue';
 import { message } from 'ant-design-vue';
+import zhCN from 'ant-design-vue/es/locale/zh_CN';
 import AgentOpsPage from './AgentOpsPage.vue';
 import ChargingDetailPage from './ChargingDetailPage.vue';
 import MaintenanceDetailPage from './MaintenanceDetailPage.vue';
@@ -45,9 +46,9 @@ import {
 import type { AgentMessage, AuditStatus, Expense, FieldBox, PageKey, Project, WeighBill } from './types';
 
 const pageHashMap: Record<PageKey, string> = {
-  agent: '#/',
+  agent: '#/agent',
   weighAudit: '#/weigh-audit',
-  weighList: '#/weigh-list',
+  weighList: '#/',
   expenseAudit: '#/expense-audit',
   expenseList: '#/expense-list',
   chargingDetail: '#/charging-detail',
@@ -74,7 +75,7 @@ function pageFromLocation(): PageKey {
   const legacyPath = normalizeRoute(`/${window.location.pathname.split('/').filter(Boolean).pop() ?? ''}`);
   if (pageByRoute[legacyPath]) return pageByRoute[legacyPath];
 
-  return 'agent';
+  return 'weighList';
 }
 
 function hashForPage(page: PageKey) {
@@ -102,8 +103,11 @@ const expenseRotation = ref(0);
 const expenseImageIndex = ref(0);
 const weighKeyword = ref('');
 const weighRouteFilter = ref('全部线路');
+const weighDateRange = ref<string[]>([]);
 const expenseStatusFilter = ref<string>('全部');
 const expenseKeyword = ref('');
+const expenseDateRange = ref<string[]>([]);
+const vehicleDateRange = ref<string[]>([]);
 const projectMenuExpanded = ref(true);
 const agentRightPanelVisible = ref(true);
 const baseValuesModalVisible = ref(false);
@@ -138,10 +142,25 @@ interface WeighBaseValues {
   taxRate: number;
 }
 
-interface BaseValuesDraft {
-  taxableUnitPrice: number;
+// 项目级基本数值：货物险、税点（同一项目所有线路一致）
+interface ProjectBaseValues {
   cargoInsurance: number;
+  taxRate: number;
+  defaultTaxableUnitPrice: number;
+  defaultDriverSalary: number;
+}
+
+// 线路级基本数值：含税单价、司机工资（同一项目不同线路可不同）
+interface RouteBaseValues {
+  taxableUnitPrice: number;
   driverSalary: number;
+}
+
+interface BaseValuesDraft {
+  routeKey: string;
+  taxableUnitPrice: number;
+  driverSalary: number;
+  cargoInsurance: number;
   taxRatePercent: number;
 }
 
@@ -152,24 +171,28 @@ const defaultBaseValues: WeighBaseValues = {
   taxRate: 0.07
 };
 
-const projectBaseValues = ref<Record<string, WeighBaseValues>>(
+const projectBaseValues = ref<Record<string, ProjectBaseValues>>(
   Object.fromEntries(
     projectRows.value.map((project, index) => [
       project.id,
       {
-        taxableUnitPrice: defaultBaseValues.taxableUnitPrice + (index % 3) * 2,
         cargoInsurance: defaultBaseValues.cargoInsurance + (index % 2) * 5,
-        driverSalary: defaultBaseValues.driverSalary + (index % 4) * 30,
-        taxRate: defaultBaseValues.taxRate
+        taxRate: defaultBaseValues.taxRate,
+        defaultTaxableUnitPrice: defaultBaseValues.taxableUnitPrice + (index % 3) * 2,
+        defaultDriverSalary: defaultBaseValues.driverSalary + (index % 4) * 30
       }
     ])
   )
 );
 
+// 线路级配置，键为 `${projectId}::${routeKey}`
+const routeBaseValues = ref<Record<string, RouteBaseValues>>({});
+
 const baseValuesDraft = reactive<BaseValuesDraft>({
+  routeKey: '',
   taxableUnitPrice: defaultBaseValues.taxableUnitPrice,
-  cargoInsurance: defaultBaseValues.cargoInsurance,
   driverSalary: defaultBaseValues.driverSalary,
+  cargoInsurance: defaultBaseValues.cargoInsurance,
   taxRatePercent: defaultBaseValues.taxRate * 100
 });
 
@@ -190,12 +213,10 @@ const pageTitle: Record<PageKey, string> = {
 };
 
 const companyNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
-  { key: 'dashboard', label: '总车队看板', icon: DashboardOutlined },
   { key: 'projects', label: '项目车队', icon: ProjectOutlined }
 ];
 
 const projectNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
-  { key: 'agent', label: '智能体工作台', icon: MessageOutlined },
   { key: 'weighList', label: '磅单列表', icon: TableOutlined },
   { key: 'expenseList', label: '付款明细', icon: WalletOutlined },
   { key: 'chargingDetail', label: '充电明细', icon: ThunderboltOutlined },
@@ -531,6 +552,12 @@ const currentVehicleFinance = computed(() => vehicleFinance.value.find((item) =>
 const currentVehicleBills = computed(() => pairedWeighRows.value.filter((item) => item.vehiclePlate === currentVehicleFinance.value.plate));
 const currentVehicleRawBills = computed(() => weighRows.value.filter((item) => item.vehiclePlate === currentVehicleFinance.value.plate));
 const currentVehicleExpenses = computed(() => allApprovedExpenseRows.value.filter((item) => item.vehiclePlate === currentVehicleFinance.value.plate));
+const vehicleBillsFiltered = computed(() =>
+  currentVehicleBills.value.filter((item) => vehicleDateRange.value.length !== 2 || (item.unloadingDate >= vehicleDateRange.value[0] && item.unloadingDate <= vehicleDateRange.value[1]))
+);
+const vehicleExpensesFiltered = computed(() =>
+  currentVehicleExpenses.value.filter((item) => vehicleDateRange.value.length !== 2 || (item.occurredDate >= vehicleDateRange.value[0] && item.occurredDate <= vehicleDateRange.value[1]))
+);
 const currentVehicleTimeline = computed(() =>
   [
     ...currentVehicleBills.value.slice(0, 8).map((bill) => ({
@@ -748,7 +775,6 @@ function buildBulkPairedWeighRows(): PairedWeighRecord[] {
     const route = routeMap[project.id];
     if (!route || projectVehicles.length === 0) return [];
     const sourceBillId = weighRows.value.find((item) => item.projectId === project.id)?.id ?? '';
-    const baseValues = baseValuesForProject(project.id);
 
     return Array.from({ length: 96 }, (_, index) => {
       const vehicle = projectVehicles[index % projectVehicles.length];
@@ -756,6 +782,10 @@ function buildBulkPairedWeighRows(): PairedWeighRecord[] {
       const loadingDate = `2026-06-${day}`;
       const unloadDay = String(Math.min(29, Number(day) + (index % 3 === 0 ? 1 : 0))).padStart(2, '0');
       const unloadingDate = `2026-06-${unloadDay}`;
+      const loadingPlace = route.loading[index % route.loading.length];
+      const unloadingPlace = route.unloading[(index + 1) % route.unloading.length];
+      const routeKey = `${loadingPlace} → ${unloadingPlace}`;
+      const baseValues = baseValuesForProject(project.id, routeKey);
       const loadingTonnage = Number((route.base + (index % 7) * 0.46 + (index % 3) * 0.12).toFixed(2));
       const unloadingTonnage = Number((loadingTonnage - (index % 5) * 0.04).toFixed(2));
       const taxableOutput = unloadingTonnage * baseValues.taxableUnitPrice;
@@ -773,9 +803,9 @@ function buildBulkPairedWeighRows(): PairedWeighRecord[] {
         arrivalVehiclePlate: vehicle.plate,
         driver: vehicle.driver,
         goods: route.goods[index % route.goods.length],
-        loadingPlace: route.loading[index % route.loading.length],
+        loadingPlace,
         loadingTonnage,
-        unloadingPlace: route.unloading[(index + 1) % route.unloading.length],
+        unloadingPlace,
         unloadingTonnage,
         taxableUnitPrice: baseValues.taxableUnitPrice,
         cargoInsurance: baseValues.cargoInsurance,
@@ -809,11 +839,14 @@ const pairedWeighRows = computed<PairedWeighRecord[]>(() => {
       if (!arrival) return null;
       usedArrivalIds.add(arrival.id);
 
-      const baseValues = baseValuesForProject(departure.projectId);
+      const routeParts = departure.remark.includes('-') ? departure.remark.split('-') : [];
+      const loadingPlace = routeParts[0] || departure.shipper;
+      const unloadingPlace = routeParts[1] || arrival.receiver;
+      const routeKey = `${loadingPlace} → ${unloadingPlace}`;
+      const baseValues = baseValuesForProject(departure.projectId, routeKey);
       const taxableOutput = arrival.net * baseValues.taxableUnitPrice;
       const taxPoint = taxableOutput * baseValues.taxRate;
       const profit = taxableOutput - baseValues.cargoInsurance - baseValues.driverSalary - taxPoint;
-      const routeParts = departure.remark.includes('-') ? departure.remark.split('-') : [];
 
       return {
         id: `${departure.id}-${arrival.id}`,
@@ -826,9 +859,9 @@ const pairedWeighRows = computed<PairedWeighRecord[]>(() => {
         arrivalVehiclePlate: arrival.vehiclePlate,
         driver: departure.driver,
         goods: departure.goods,
-        loadingPlace: routeParts[0] || departure.shipper,
+        loadingPlace,
         loadingTonnage: departure.net,
-        unloadingPlace: routeParts[1] || arrival.receiver,
+        unloadingPlace,
         unloadingTonnage: arrival.net,
         taxableUnitPrice: baseValues.taxableUnitPrice,
         cargoInsurance: baseValues.cargoInsurance,
@@ -882,10 +915,11 @@ const filteredPairedWeighRows = computed(() =>
     const keyword = weighKeyword.value.trim();
     const routeKey = `${item.loadingPlace} → ${item.unloadingPlace}`;
     const routeMatched = weighRouteFilter.value === '全部线路' || weighRouteFilter.value === routeKey;
+    const dateMatched = weighDateRange.value.length !== 2 || (item.unloadingDate >= weighDateRange.value[0] && item.unloadingDate <= weighDateRange.value[1]);
     const keywordMatched =
       !keyword ||
       [item.vehiclePlate, item.driver, item.goods, item.customer, item.loadingPlace, item.unloadingPlace, item.orderNo].some((value) => value.includes(keyword));
-    return item.projectId === selectedProjectId.value && routeMatched && keywordMatched;
+    return item.projectId === selectedProjectId.value && routeMatched && dateMatched && keywordMatched;
   })
 );
 
@@ -906,7 +940,8 @@ const filteredExpenseRows = computed(() =>
     const keywordMatched =
       !keyword ||
       [item.vehiclePlate, item.driver, item.type, item.item, item.payStatus].some((value) => value.includes(keyword));
-    return (expenseStatusFilter.value === '全部' || item.payStatus === expenseStatusFilter.value) && keywordMatched;
+    const dateMatched = expenseDateRange.value.length !== 2 || (item.occurredDate >= expenseDateRange.value[0] && item.occurredDate <= expenseDateRange.value[1]);
+    return (expenseStatusFilter.value === '全部' || item.payStatus === expenseStatusFilter.value) && dateMatched && keywordMatched;
   })
 );
 
@@ -1138,8 +1173,19 @@ function reviewField(key: string, label: string, value: string | number, source:
   return { key, label, value, source, rawKey };
 }
 
-function baseValuesForProject(projectId: string): WeighBaseValues {
-  return projectBaseValues.value[projectId] ?? defaultBaseValues;
+function baseValuesForProject(projectId: string, routeKey?: string): WeighBaseValues {
+  const project = projectBaseValues.value[projectId];
+  const cargoInsurance = project?.cargoInsurance ?? defaultBaseValues.cargoInsurance;
+  const taxRate = project?.taxRate ?? defaultBaseValues.taxRate;
+  const defaultUnit = project?.defaultTaxableUnitPrice ?? defaultBaseValues.taxableUnitPrice;
+  const defaultSalary = project?.defaultDriverSalary ?? defaultBaseValues.driverSalary;
+  const route = routeKey ? routeBaseValues.value[`${projectId}::${routeKey}`] : undefined;
+  return {
+    taxableUnitPrice: route?.taxableUnitPrice ?? defaultUnit,
+    driverSalary: route?.driverSalary ?? defaultSalary,
+    cargoInsurance,
+    taxRate
+  };
 }
 
 function buildWeighAuditPair(departure: WeighBill, arrival: WeighBill): WeighAuditPair {
@@ -1311,7 +1357,12 @@ function saveProjectEditor() {
   };
   projectBaseValues.value = {
     ...projectBaseValues.value,
-    [newProjectId]: { ...defaultBaseValues }
+    [newProjectId]: {
+      cargoInsurance: defaultBaseValues.cargoInsurance,
+      taxRate: defaultBaseValues.taxRate,
+      defaultTaxableUnitPrice: defaultBaseValues.taxableUnitPrice,
+      defaultDriverSalary: defaultBaseValues.driverSalary
+    }
   };
   selectedProjectId.value = newProjectId;
   message.success('新项目 / 车队已创建');
@@ -1431,8 +1482,7 @@ function syncReviewPointersForProject(projectId: string) {
 
 function openProjectWorkbench(projectId: string) {
   selectProject(projectId);
-  activePage.value = 'agent';
-  agentRightPanelVisible.value = true;
+  activePage.value = 'weighList';
 }
 
 function handleSidebarProjectClick(projectId: string) {
@@ -1515,30 +1565,58 @@ function updateWeighValue(key: string, value: string) {
 }
 
 function updateBaseValueDraft(key: keyof BaseValuesDraft, value: unknown) {
+  if (key === 'routeKey') return;
   baseValuesDraft[key] = Number(value) || 0;
 }
 
-function openBaseValuesModal() {
-  const values = selectedProjectBaseValues.value;
+// 切换线路时载入该线路的含税单价/司机工资
+function onBaseValuesRouteChange(routeKey: string) {
+  baseValuesDraft.routeKey = routeKey;
+  const values = baseValuesForProject(selectedProjectId.value, routeKey);
   baseValuesDraft.taxableUnitPrice = values.taxableUnitPrice;
-  baseValuesDraft.cargoInsurance = values.cargoInsurance;
   baseValuesDraft.driverSalary = values.driverSalary;
+}
+
+function openBaseValuesModal() {
+  const firstRoute = weighRouteOptions.value[0]?.value ?? '';
+  baseValuesDraft.routeKey = firstRoute;
+  const values = baseValuesForProject(selectedProjectId.value, firstRoute);
+  baseValuesDraft.taxableUnitPrice = values.taxableUnitPrice;
+  baseValuesDraft.driverSalary = values.driverSalary;
+  baseValuesDraft.cargoInsurance = values.cargoInsurance;
   baseValuesDraft.taxRatePercent = Number((values.taxRate * 100).toFixed(2));
   baseValuesModalVisible.value = true;
 }
 
 function saveBaseValues() {
+  const projectId = selectedProjectId.value;
+  // 货物险、税点：项目级统一
+  const project = projectBaseValues.value[projectId] ?? {
+    cargoInsurance: defaultBaseValues.cargoInsurance,
+    taxRate: defaultBaseValues.taxRate,
+    defaultTaxableUnitPrice: defaultBaseValues.taxableUnitPrice,
+    defaultDriverSalary: defaultBaseValues.driverSalary
+  };
   projectBaseValues.value = {
     ...projectBaseValues.value,
-    [selectedProjectId.value]: {
-      taxableUnitPrice: Number(baseValuesDraft.taxableUnitPrice) || defaultBaseValues.taxableUnitPrice,
+    [projectId]: {
+      ...project,
       cargoInsurance: Number(baseValuesDraft.cargoInsurance) || 0,
-      driverSalary: Number(baseValuesDraft.driverSalary) || 0,
       taxRate: (Number(baseValuesDraft.taxRatePercent) || 0) / 100
     }
   };
+  // 含税单价、司机工资：线路级
+  if (baseValuesDraft.routeKey) {
+    routeBaseValues.value = {
+      ...routeBaseValues.value,
+      [`${projectId}::${baseValuesDraft.routeKey}`]: {
+        taxableUnitPrice: Number(baseValuesDraft.taxableUnitPrice) || defaultBaseValues.taxableUnitPrice,
+        driverSalary: Number(baseValuesDraft.driverSalary) || 0
+      }
+    };
+  }
   baseValuesModalVisible.value = false;
-  message.success(`${currentProject.value.name} 基本数值已更新`);
+  message.success(`${currentProject.value.name} · ${baseValuesDraft.routeKey || '默认'} 基本数值已更新`);
 }
 
 function onWeighInput(key: string, value: unknown) {
@@ -1878,6 +1956,7 @@ onBeforeUnmount(() => {
 
 <template>
   <a-config-provider
+    :locale="zhCN"
     :theme="{
       token: {
         colorPrimary: '#08090C',
@@ -2005,107 +2084,10 @@ onBeforeUnmount(() => {
           </div>
         </header>
 
-        <section v-if="activePage === 'agent'" class="content agent-layout">
-          <div class="chat-panel">
-            <div ref="chatStreamRef" class="chat-stream">
-              <div v-for="(msg, index) in agentMessages" :key="index" class="chat-message" :class="msg.role">
-                <div class="avatar">{{ msg.role === 'agent' ? 'AI' : '我' }}</div>
-                <div class="bubble">
-                  <p>{{ msg.content }}</p>
-                  <div v-if="msg.streaming" class="agent-typing">
-                    <i></i><i></i><i></i>
-                    <span>生成中</span>
-                  </div>
-                  <div v-if="msg.intent || msg.taskSteps?.length" class="agent-process">
-                    <div v-if="msg.intent" class="process-block">
-                      <span>意图理解</span>
-                      <strong>{{ msg.intent }}</strong>
-                    </div>
-                    <div v-if="msg.taskSteps?.length" class="process-block">
-                      <span>任务拆解</span>
-                      <ol>
-                        <li v-for="step in msg.taskSteps" :key="step">{{ step }}</li>
-                      </ol>
-                    </div>
-                  </div>
-                  <div v-if="msg.skills?.length" class="skill-row">
-                    <a-tag v-for="skill in msg.skills" :key="skill" color="blue">{{ skill }}</a-tag>
-                  </div>
-                  <div v-if="msg.resultCards?.length" class="result-row">
-                    <button
-                      v-for="card in msg.resultCards"
-                      :key="card.label"
-                      class="mini-result"
-                      :class="[card.tone, { clickable: resultCardTarget(card) }]"
-                      type="button"
-                      @click="handleResultCardClick(card)"
-                    >
-                      <span>{{ card.label }}</span>
-                      <strong>{{ card.value }}</strong>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="chat-input">
-              <div class="quick-grid">
-                <span class="quick-label">推荐指令</span>
-                <button v-for="prompt in quickPrompts" :key="prompt" @click="sendAgent(prompt)">{{ prompt }}</button>
-              </div>
-              <div class="agent-composer">
-                <a-textarea
-                  v-model:value="agentInput"
-                  :bordered="false"
-                  :auto-size="{ minRows: 2, maxRows: 4 }"
-                  placeholder="发消息..."
-                  @keydown.enter.exact.prevent="sendAgent()"
-                />
-                <div class="composer-toolbar">
-                  <div ref="modelSelectRef" class="model-select">
-                    <button
-                      type="button"
-                      role="combobox"
-                      aria-haspopup="listbox"
-                      :aria-expanded="isModelSelectOpen"
-                      class="model-select-trigger"
-                      @click.stop="isModelSelectOpen = !isModelSelectOpen"
-                    >
-                      <span class="model-glyph" :class="selectedAgentModel.tone">{{ selectedAgentModel.short }}</span>
-                      <span class="model-label">{{ selectedAgentModel.label }}</span>
-                      <DownOutlined />
-                    </button>
-                    <div v-if="isModelSelectOpen" class="model-menu" role="listbox">
-                      <div class="model-menu-title">内置模型</div>
-                      <button
-                        v-for="option in agentModelOptions"
-                        :key="option.value"
-                        type="button"
-                        role="option"
-                        :aria-selected="selectedAgentModel.value === option.value"
-                        class="model-option"
-                        :class="{ active: selectedAgentModel.value === option.value }"
-                        @click="selectAgentModel(option)"
-                      >
-                        <span class="model-glyph" :class="option.tone">{{ option.short }}</span>
-                        <span>
-                          <strong>{{ option.label }}</strong>
-                          <em>{{ option.hint }}</em>
-                        </span>
-                        <CheckOutlined v-if="selectedAgentModel.value === option.value" />
-                      </button>
-                    </div>
-                  </div>
-                  <span class="composer-hint">Enter 发送，Shift Enter 换行</span>
-                  <a-button type="primary" shape="circle" @click="sendAgent()">
-                    <template #icon><MessageOutlined /></template>
-                  </a-button>
-                </div>
-              </div>
-            </div>
+        <section v-if="activePage === 'weighAudit'" class="content review-screen">
+          <div class="review-back-bar">
+            <a-button @click="navigate('weighList')"><LeftOutlined />返回磅单列表</a-button>
           </div>
-        </section>
-
-        <section v-else-if="activePage === 'weighAudit'" class="content review-screen">
           <div class="review-summary">
             <div>
               <span>当前 {{ reviewWeighPairIndex + 1 }} / {{ auditWeighPairs.length }}</span>
@@ -2215,14 +2197,14 @@ onBeforeUnmount(() => {
           </div>
           <div class="formula-strip">
             <span>本项目基本数值</span>
-            <b>含税单价 {{ selectedProjectBaseValues.taxableUnitPrice }} 元/吨</b>
             <b>货物险 {{ money(selectedProjectBaseValues.cargoInsurance) }}/趟</b>
-            <b>司机工资 {{ money(selectedProjectBaseValues.driverSalary) }}/趟</b>
             <b>税点 {{ Math.round(selectedProjectBaseValues.taxRate * 100) }}%</b>
+            <span>含税单价、司机工资按线路分别配置</span>
             <span>含税产值 = 卸货吨位 × 含税单价；利润 = 含税产值 - 货物险 - 司机工资 - 税点</span>
-            <a-button size="small" @click="openBaseValuesModal">修改</a-button>
+            <a-button size="small" @click="openBaseValuesModal">按线路配置</a-button>
           </div>
-          <div class="filter-bar">
+          <div class="filter-bar filter-bar-wide">
+            <a-range-picker v-model:value="weighDateRange" value-format="YYYY-MM-DD" />
             <a-select v-model:value="weighRouteFilter" class="route-select">
               <a-select-option value="全部线路">全部线路</a-select-option>
               <a-select-option v-for="route in weighRouteOptions" :key="route.value" :value="route.value">{{ route.label }}（{{ route.count }}）</a-select-option>
@@ -2252,6 +2234,9 @@ onBeforeUnmount(() => {
         </section>
 
         <section v-else-if="activePage === 'expenseAudit'" class="content review-screen">
+          <div class="review-back-bar">
+            <a-button @click="navigate('expenseList')"><LeftOutlined />返回付款明细</a-button>
+          </div>
           <div class="review-summary">
             <div>
               <span>当前 {{ reviewExpenseIndex + 1 }} / {{ expenseRows.length }}</span>
@@ -2350,7 +2335,8 @@ onBeforeUnmount(() => {
             <div class="metric-card"><span>今日报销笔数</span><strong>{{ expenseListSummary.todayExpenseCount }}</strong></div>
             <div class="metric-card"><span>今日付款笔数</span><strong>{{ expenseListSummary.todayPaidCount }}</strong></div>
           </div>
-          <div class="filter-bar">
+          <div class="filter-bar filter-bar-wide">
+            <a-range-picker v-model:value="expenseDateRange" value-format="YYYY-MM-DD" />
             <a-input v-model:value="expenseKeyword" placeholder="搜索司机、车辆、类型、支付状态" allow-clear>
               <template #prefix><SearchOutlined /></template>
             </a-input>
@@ -2387,98 +2373,6 @@ onBeforeUnmount(() => {
         <MaintenanceDetailPage v-else-if="activePage === 'maintenanceDetail'" />
         <TireExpensePage v-else-if="activePage === 'tireExpense'" />
 
-        <section v-else-if="activePage === 'dashboard'" class="content dashboard-screen">
-          <div class="metric-grid four">
-            <div class="metric-card"><span>总车辆数</span><strong>{{ totalStats.vehicles }}</strong></div>
-            <div class="metric-card"><span>运营车辆数</span><strong>{{ totalStats.running }}</strong></div>
-            <div class="metric-card"><span>本月总运费</span><strong>{{ money(totalStats.revenue) }}</strong></div>
-            <div class="metric-card"><span>本月总成本</span><strong>{{ money(totalStats.cost) }}</strong></div>
-            <div class="metric-card" :class="{ danger: totalStats.profit < 0 }"><span>本月毛利</span><strong>{{ money(totalStats.profit) }}</strong></div>
-            <div class="metric-card"><span>平均单车利润</span><strong>{{ money(totalStats.profit / totalStats.vehicles) }}</strong></div>
-            <div class="metric-card orange"><span>本月车次</span><strong>{{ totalStats.monthTrips }}</strong></div>
-            <div class="metric-card warning"><span>本月报销费用</span><strong>{{ money(totalStats.monthExpense) }}</strong></div>
-          </div>
-          <div class="dashboard-layout">
-            <div class="chart-card trend-card">
-              <div class="chart-card-head">
-                <div>
-                  <h3>项目月利润趋势</h3>
-                  <span>{{ dashboardTrendProject.name }} / {{ dashboardMonthOptions.find((item) => item.value === dashboardTrendMonth)?.label }} / 总利润 {{ money(selectedProjectMonthlyProfit) }}</span>
-                </div>
-                <div class="dashboard-trend-controls">
-                  <a-select v-model:value="dashboardTrendProjectId" class="dashboard-project-select">
-                    <a-select-option v-for="project in projectRows" :key="project.id" :value="project.id">{{ project.name }}</a-select-option>
-                  </a-select>
-                  <a-select v-model:value="dashboardTrendMonth" class="dashboard-month-select">
-                    <a-select-option v-for="month in dashboardMonthOptions" :key="month.value" :value="month.value">{{ month.label }}</a-select-option>
-                  </a-select>
-                </div>
-              </div>
-              <div class="trend-chart monthly-trend-chart">
-                <div v-for="day in projectMonthlyProfitTrend" :key="day.day" class="trend-col monthly">
-                  <div class="bar-wrap">
-                    <b>{{ money(day.profit) }}</b>
-                    <div class="bar" :class="{ negative: day.profit < 0 }" :style="{ height: `${Math.max(8, (Math.abs(day.profit) / maxProjectTrendProfit) * 150)}px` }"></div>
-                  </div>
-                  <span>{{ day.day }}</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="dashboard-analysis-grid">
-              <div class="chart-card vehicle-rank-card">
-                <div class="chart-card-head">
-                  <h3>本月车辆利润排名</h3>
-                  <span>{{ vehicleRank.length }} 辆</span>
-                </div>
-                <div class="rank-list">
-                  <div v-for="vehicle in vehicleRank" :key="vehicle.id" class="rank-line vehicle-rank-line" @click="goVehicle(vehicle.id)">
-                    <div class="rank-meta">
-                      <span>{{ vehicle.plate }}</span>
-                      <em>{{ projectName(vehicle.projectId) }} · {{ vehicle.driver }}</em>
-                    </div>
-                    <div class="rank-track"><i :class="{ negative: vehicle.profit < 0 }" :style="{ width: `${Math.max(6, (Math.abs(vehicle.profit) / maxVehicleProfit) * 100)}%` }"></i></div>
-                    <b :class="{ danger: vehicle.profit < 0 }">{{ money(vehicle.profit) }}</b>
-                  </div>
-                </div>
-              </div>
-
-              <div class="dashboard-secondary-grid">
-                <div class="chart-card">
-                  <h3>项目利润对比</h3>
-                  <div v-for="project in projectProfitComparison" :key="project.name" class="summary-line">
-                    <span>{{ project.name }}</span>
-                    <b :class="{ danger: project.profit < 0 }">{{ money(project.profit) }}</b>
-                  </div>
-                </div>
-                <div class="chart-card">
-                  <h3>异常单据分布</h3>
-                  <div class="issue-grid">
-                    <div><strong>{{ weighRows.filter((item) => item.anomalies.includes('缺少到货单')).length }}</strong><span>缺少到货单</span></div>
-                    <div><strong>{{ weighRows.filter((item) => item.anomalies.includes('疑似重复单')).length }}</strong><span>重复磅单</span></div>
-                    <div><strong>{{ expenseRows.filter((item) => item.anomalies.includes('重复报销')).length }}</strong><span>重复报销</span></div>
-                    <div><strong>{{ expenseRows.filter((item) => item.anomalies.includes('超预算')).length }}</strong><span>超预算</span></div>
-                  </div>
-                </div>
-                <div class="chart-card">
-                  <h3>按司机费用排名</h3>
-                  <div v-for="driver in ['何明军', '罗明', '刘启', '李进', '王成']" :key="driver" class="summary-line">
-                    <span>{{ driver }}</span>
-                    <b>{{ money(expenseRows.filter((item) => item.driver === driver).reduce((sum, item) => sum + item.amount, 0)) }}</b>
-                  </div>
-                </div>
-                <div class="chart-card">
-                  <h3>费用类型占比</h3>
-                  <div class="donut large"></div>
-                  <div class="legend-row">
-                    <span>油费</span><span>维修</span><span>路费</span><span>杂费</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
         <section v-else-if="activePage === 'vehicleDetail'" class="content vehicle-screen">
           <div class="vehicle-head">
             <a-select v-model:value="selectedVehicleId" class="vehicle-select">
@@ -2488,9 +2382,10 @@ onBeforeUnmount(() => {
               <h2>{{ currentVehicleFinance.plate }} · {{ currentVehicleFinance.driver }}</h2>
               <span>{{ projectName(currentVehicleFinance.projectId) }} / {{ currentVehicleFinance.model }} / {{ currentVehicleFinance.status }}</span>
             </div>
+            <a-range-picker v-model:value="vehicleDateRange" value-format="YYYY-MM-DD" class="vehicle-date-range" />
           </div>
           <div class="metric-grid four">
-            <div class="metric-card"><span>运单 / 磅单</span><strong>{{ currentVehicleBills.length }}</strong></div>
+            <div class="metric-card"><span>运单 / 磅单</span><strong>{{ vehicleBillsFiltered.length }}</strong></div>
             <div class="metric-card"><span>收入</span><strong>{{ money(currentVehicleFinance.revenue) }}</strong></div>
             <div class="metric-card"><span>成本</span><strong>{{ money(currentVehicleFinance.cost) }}</strong></div>
             <div class="metric-card" :class="{ danger: currentVehicleFinance.profit < 0 }"><span>利润</span><strong>{{ money(currentVehicleFinance.profit) }}</strong></div>
@@ -2501,7 +2396,7 @@ onBeforeUnmount(() => {
               <a-table
                 size="small"
                 :columns="vehicleBillColumns"
-                :data-source="currentVehicleBills"
+                :data-source="vehicleBillsFiltered"
                 :pagination="{ pageSize: 8 }"
                 :scroll="{ x: 1110 }"
                 row-key="id"
@@ -2523,7 +2418,7 @@ onBeforeUnmount(() => {
               <a-table
                 size="small"
                 :columns="vehicleExpenseColumns"
-                :data-source="currentVehicleExpenses"
+                :data-source="vehicleExpensesFiltered"
                 :pagination="{ pageSize: 8 }"
                 :scroll="{ x: 890 }"
                 row-key="id"
@@ -2536,32 +2431,7 @@ onBeforeUnmount(() => {
               </a-table>
             </div>
           </div>
-          <div class="vehicle-support-grid">
-            <div class="chart-card">
-              <h3>缺失与风险提醒</h3>
-              <a-alert
-                v-if="currentVehicleFinance.profit < 0"
-                type="error"
-                show-icon
-                message="单车利润为负"
-                description="系统建议复核维修费、缺失到货单和异常成本。"
-              />
-              <a-alert
-                v-if="currentVehicleRawBills.some((item) => item.anomalies.includes('缺少到货单'))"
-                type="warning"
-                show-icon
-                message="存在缺失到货磅单"
-                description="请联系司机补发到货磅单或手工标记原因。"
-              />
-              <a-alert
-                v-if="currentVehicleExpenses.some((item) => item.anomalies.includes('重复报销'))"
-                type="warning"
-                show-icon
-                message="疑似重复报销"
-                description="同司机同金额同类型短时间内重复提报。"
-              />
-              <p v-if="currentVehicleFinance.profit >= 0 && !currentVehicleRawBills.some((item) => item.anomalies.length)" class="muted risk-empty">当前车辆暂无高优先级风险。</p>
-            </div>
+          <div class="vehicle-support-grid single">
             <div class="chart-card">
               <h3>账务时间线</h3>
               <div class="timeline-list">
@@ -2947,12 +2817,6 @@ onBeforeUnmount(() => {
               <b>{{ money(item.amount) }}</b>
             </div>
           </div>
-          <div class="right-card checks">
-            <h3>付款动作</h3>
-            <div><CheckOutlined /> 仅显示已审核通过费用</div>
-            <div><CheckOutlined /> 财务在列表中标记已付</div>
-            <div><CheckOutlined /> 统计随筛选条件实时变化</div>
-          </div>
         </template>
         <template v-else>
           <div class="right-card">
@@ -2997,19 +2861,27 @@ onBeforeUnmount(() => {
       </aside>
     </div>
 
-    <a-modal v-model:open="baseValuesModalVisible" title="修改本项目基本数值" width="520px" ok-text="保存" cancel-text="取消" @ok="saveBaseValues">
+    <a-modal v-model:open="baseValuesModalVisible" title="按线路配置基本数值" width="520px" ok-text="保存" cancel-text="取消" @ok="saveBaseValues">
       <div class="base-values-modal">
+        <label class="base-route-label">
+          <span>选择线路</span>
+          <a-select :value="baseValuesDraft.routeKey" @change="onBaseValuesRouteChange">
+            <a-select-option v-for="route in weighRouteOptions" :key="route.value" :value="route.value">{{ route.label }}</a-select-option>
+          </a-select>
+        </label>
+        <div class="base-section-title">线路级（各线路不同）</div>
         <label>
           <span>含税单价</span>
           <a-input-number :value="baseValuesDraft.taxableUnitPrice" :min="0" :precision="2" addon-after="元/吨" @update:value="updateBaseValueDraft('taxableUnitPrice', $event)" />
         </label>
         <label>
-          <span>货物险</span>
-          <a-input-number :value="baseValuesDraft.cargoInsurance" :min="0" :precision="2" addon-after="元/趟" @update:value="updateBaseValueDraft('cargoInsurance', $event)" />
-        </label>
-        <label>
           <span>司机工资</span>
           <a-input-number :value="baseValuesDraft.driverSalary" :min="0" :precision="2" addon-after="元/趟" @update:value="updateBaseValueDraft('driverSalary', $event)" />
+        </label>
+        <div class="base-section-title">项目级（所有线路统一）</div>
+        <label>
+          <span>货物险</span>
+          <a-input-number :value="baseValuesDraft.cargoInsurance" :min="0" :precision="2" addon-after="元/趟" @update:value="updateBaseValueDraft('cargoInsurance', $event)" />
         </label>
         <label>
           <span>税点</span>
