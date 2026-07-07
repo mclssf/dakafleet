@@ -196,9 +196,7 @@ const companyNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
 
 const projectNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
   { key: 'agent', label: '智能体工作台', icon: MessageOutlined },
-  { key: 'weighAudit', label: '磅单审核', icon: AuditOutlined },
   { key: 'weighList', label: '磅单列表', icon: TableOutlined },
-  { key: 'expenseAudit', label: '报销审核', icon: FileSearchOutlined },
   { key: 'expenseList', label: '付款明细', icon: WalletOutlined },
   { key: 'chargingDetail', label: '充电明细', icon: ThunderboltOutlined },
   { key: 'maintenanceDetail', label: '维修费用', icon: ToolOutlined },
@@ -1974,13 +1972,13 @@ onBeforeUnmount(() => {
               <component :is="item.icon" />
               <span>{{ item.label }}</span>
               <a-badge
-                v-if="item.key === 'weighAudit'"
+                v-if="item.key === 'weighList'"
                 :count="projectPendingWeigh(selectedProjectId)"
                 :number-style="{ backgroundColor: '#F77113' }"
                 class="nav-badge"
               />
               <a-badge
-                v-else-if="item.key === 'expenseAudit'"
+                v-else-if="item.key === 'expenseList'"
                 :count="projectPendingExpense(selectedProjectId)"
                 :number-style="{ backgroundColor: '#F77113' }"
                 class="nav-badge"
@@ -2198,6 +2196,16 @@ onBeforeUnmount(() => {
         </section>
 
         <section v-else-if="activePage === 'weighList'" class="content list-screen">
+          <div class="audit-entry-bar">
+            <div class="audit-entry-info">
+              <AuditOutlined />
+              <div>
+                <strong>磅单审核</strong>
+                <span>当前项目 {{ projectPendingWeigh(selectedProjectId) }} 张待审核磅单</span>
+              </div>
+            </div>
+            <a-button type="primary" @click="navigate('weighAudit')">进入磅单审核<RightOutlined /></a-button>
+          </div>
           <div class="metric-grid five">
             <div class="metric-card"><span>总车次</span><strong>{{ weighListSummary.trips }}</strong></div>
             <div class="metric-card"><span>装货吨位</span><strong>{{ ton(weighListSummary.loadingNet) }}</strong></div>
@@ -2325,6 +2333,16 @@ onBeforeUnmount(() => {
         </section>
 
         <section v-else-if="activePage === 'expenseList'" class="content list-screen">
+          <div class="audit-entry-bar">
+            <div class="audit-entry-info">
+              <FileSearchOutlined />
+              <div>
+                <strong>报销审核</strong>
+                <span>当前项目 {{ projectPendingExpense(selectedProjectId) }} 笔待审核报销</span>
+              </div>
+            </div>
+            <a-button type="primary" @click="navigate('expenseAudit')">进入报销审核<RightOutlined /></a-button>
+          </div>
           <div class="metric-grid five">
             <div class="metric-card"><span>总报销金额</span><strong>{{ money(expenseListSummary.amount) }}</strong></div>
             <div class="metric-card green"><span>已付款</span><strong>{{ money(expenseListSummary.paid) }}</strong></div>
