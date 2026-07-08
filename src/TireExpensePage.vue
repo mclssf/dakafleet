@@ -267,6 +267,7 @@ function saveAdd() {
       class="dense-table"
       :row-selection="{ selectedRowKeys, onChange: (keys: any) => (selectedRowKeys = keys) }"
     >
+      <template #emptyText><a-empty description="暂无轮胎数据" /></template>
       <template #bodyCell="{ column, record }">
         <template v-if="editingId === record.id && ['date','vendor','vehiclePlate','tireNumber','remark','receiptNo'].includes(column.dataIndex)">
           <a-input v-model:value="editDraft[column.dataIndex]" size="small" />

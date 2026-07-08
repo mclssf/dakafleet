@@ -108,6 +108,7 @@ const expenseStatusFilter = ref<string>('全部');
 const expenseKeyword = ref('');
 const expenseDateRange = ref<string[]>([]);
 const vehicleDateRange = ref<string[]>([]);
+const driverSummaryExpanded = ref(true);
 const projectMenuExpanded = ref(true);
 const agentRightPanelVisible = ref(true);
 const baseValuesModalVisible = ref(false);
@@ -367,38 +368,6 @@ const projectOwnerOptions: ProjectOwnerOption[] = [
 
 const projectSkillOptions: ProjectSkillOption[] = [
   {
-    id: 'route-risk-expert',
-    name: '在途风险专家',
-    type: '物流专家',
-    description: '结合线路、时效和历史履约表现，识别高优先级在途风险。',
-    requiresLogin: false,
-    icon: WarningOutlined
-  },
-  {
-    id: 'gps-trace-expert',
-    name: '轨迹真实性专家',
-    type: '物流专家',
-    description: '分析轨迹断点、速度跳变和定位漂移，辅助判断 GPS 造假风险。',
-    requiresLogin: false,
-    icon: CarOutlined
-  },
-  {
-    id: 'parking-event-expert',
-    name: '异常停车专家',
-    type: '物流专家',
-    description: '识别服务区、物流园、中转仓等停靠点，区分合理休息和高风险长停。',
-    requiresLogin: false,
-    icon: AuditOutlined
-  },
-  {
-    id: 'delivery-sla-expert',
-    name: '到货时效专家',
-    type: '物流专家',
-    description: '评估预计到达时间、晚点风险和卸货超时，输出时效处置建议。',
-    requiresLogin: false,
-    icon: TableOutlined
-  },
-  {
     id: 'weigh-ledger-expert',
     name: '磅单账务专家',
     type: '账务专家',
@@ -408,7 +377,7 @@ const projectSkillOptions: ProjectSkillOption[] = [
   },
   {
     id: 'expense-audit-expert',
-    name: '报销审核专家',
+    name: '报销账务专家',
     type: '账务专家',
     description: '识别费用凭证、重复报销和超预算报销，辅助财务连续审核。',
     requiresLogin: false,
@@ -417,18 +386,18 @@ const projectSkillOptions: ProjectSkillOption[] = [
 ];
 
 const projectDataSourceMap = ref<Record<string, ProjectDataSourceConfig>>({
-  p1: { tmsEmployeeIds: ['tms-yunzhi'], wechatEmployeeIds: ['wx-yunnan-weigh'], skillIds: ['route-risk-expert', 'weigh-ledger-expert'], ownerIds: ['u-wumin', 'u-gaodiaodu'] },
-  p2: { tmsEmployeeIds: ['tms-qujing'], wechatEmployeeIds: ['wx-qujing-expense'], skillIds: ['parking-event-expert', 'expense-audit-expert'], ownerIds: ['u-caocw'] },
-  p3: { tmsEmployeeIds: ['tms-huayin'], wechatEmployeeIds: ['wx-huayin-fuel'], skillIds: ['gps-trace-expert', 'expense-audit-expert'], ownerIds: ['u-qinops'] },
-  p4: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-zhaotong-energy'], skillIds: ['delivery-sla-expert', 'expense-audit-expert'], ownerIds: ['u-zhoucw'] },
-  p5: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-hailuo-repair'], skillIds: ['parking-event-expert'], ownerIds: ['u-gaodiaodu'] },
-  p6: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-yunnan-weigh', 'wx-huayin-fuel'], skillIds: ['gps-trace-expert', 'weigh-ledger-expert'], ownerIds: ['u-qinops', 'u-wumin'] },
-  p7: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-baise-toll'], skillIds: ['route-risk-expert', 'expense-audit-expert'], ownerIds: ['u-luaccount'] }
+  p1: { tmsEmployeeIds: ['tms-yunzhi'], wechatEmployeeIds: ['wx-yunnan-weigh'], skillIds: ['weigh-ledger-expert'], ownerIds: ['u-wumin', 'u-gaodiaodu'] },
+  p2: { tmsEmployeeIds: ['tms-qujing'], wechatEmployeeIds: ['wx-qujing-expense'], skillIds: ['expense-audit-expert'], ownerIds: ['u-caocw'] },
+  p3: { tmsEmployeeIds: ['tms-huayin'], wechatEmployeeIds: ['wx-huayin-fuel'], skillIds: ['weigh-ledger-expert', 'expense-audit-expert'], ownerIds: ['u-qinops'] },
+  p4: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-zhaotong-energy'], skillIds: ['expense-audit-expert'], ownerIds: ['u-zhoucw'] },
+  p5: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-hailuo-repair'], skillIds: ['weigh-ledger-expert'], ownerIds: ['u-gaodiaodu'] },
+  p6: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-yunnan-weigh', 'wx-huayin-fuel'], skillIds: ['weigh-ledger-expert'], ownerIds: ['u-qinops', 'u-wumin'] },
+  p7: { tmsEmployeeIds: [], wechatEmployeeIds: ['wx-baise-toll'], skillIds: ['expense-audit-expert'], ownerIds: ['u-luaccount'] }
 });
 
 const projectEditorVisible = ref(false);
 const projectEditorMode = ref<'create' | 'edit'>('create');
-const projectEditorTab = ref<ProjectEditorTab>('TMS');
+const projectEditorTab = ref<ProjectEditorTab>('微信群');
 const editingProjectId = ref('');
 const projectEditorForm = reactive<ProjectEditorForm>({
   name: '',
@@ -682,7 +651,7 @@ function buildBulkExpenseRows(): Expense[] {
     { type: '住宿费', items: ['临停住宿', '排队住宿', '晚点住宿'], base: 116 },
     { type: '加水费', items: ['水箱加水', '货箱清洗加水', '三次加水'], base: 18 }
   ];
-  const statuses: Expense['payStatus'][] = ['未付款', '已付款', '已付款', '部分付款', '未付款', '已付款'];
+  const statuses: Expense['payStatus'][] = ['未付款', '已付款', '已付款', '未付款', '未付款', '已付款'];
 
   return projects.flatMap((project, projectIndex) => {
     const projectVehicles = vehicles.filter((vehicle) => vehicle.projectId === project.id);
@@ -1246,14 +1215,14 @@ function employeeStatusColor(status: ProjectDataEmployee['status']) {
 
 function resetProjectEditor() {
   editingProjectId.value = '';
-  projectEditorTab.value = 'TMS';
+  projectEditorTab.value = '微信群';
   projectEditorForm.name = '';
   projectEditorForm.route = '';
   projectEditorForm.customer = '';
   projectEditorForm.ownerIds = [];
   projectEditorForm.tmsEmployeeIds = [];
   projectEditorForm.wechatEmployeeIds = [];
-  projectEditorForm.skillIds = ['route-risk-expert', 'gps-trace-expert', 'parking-event-expert'];
+  projectEditorForm.skillIds = ['weigh-ledger-expert', 'expense-audit-expert'];
 }
 
 function openCreateProject() {
@@ -1268,7 +1237,7 @@ function openEditProject(projectId: string) {
   const sourceConfig = projectDataSourceMap.value[project.id] ?? { tmsEmployeeIds: [], wechatEmployeeIds: [] };
   projectEditorMode.value = 'edit';
   editingProjectId.value = project.id;
-  projectEditorTab.value = 'TMS';
+  projectEditorTab.value = '微信群';
   projectEditorForm.name = project.name;
   projectEditorForm.route = project.route;
   projectEditorForm.customer = project.route.match(/客户：([^｜]+)/)?.[1] ?? '';
@@ -1495,6 +1464,16 @@ function handleSidebarProjectClick(projectId: string) {
 
 function navigate(page: PageKey) {
   activePage.value = page;
+}
+
+// 进入项目/车队管理时记录来源页，返回时回到进入前的页面
+const pageBeforeManage = ref<PageKey>('projects');
+function openProjectManage() {
+  pageBeforeManage.value = activePage.value;
+  activePage.value = 'projectManage';
+}
+function backFromProjectManage() {
+  activePage.value = pageBeforeManage.value === 'projectManage' ? 'projects' : pageBeforeManage.value;
 }
 
 function syncBrowserHash(page: PageKey) {
@@ -2015,7 +1994,7 @@ onBeforeUnmount(() => {
         <div class="side-section project-section">
           <div class="side-title side-title-action">
             <span>项目 / 车队</span>
-            <button type="button" :class="{ active: activePage === 'projectManage' }" @click="navigate('projectManage')">
+            <button type="button" :class="{ active: activePage === 'projectManage' }" @click="openProjectManage">
               <SettingOutlined />
               管理
             </button>
@@ -2129,7 +2108,7 @@ onBeforeUnmount(() => {
             <div class="form-pane paired-form-pane">
               <div class="form-head">
                 <div>
-                  <strong>Agent 结构化结果</strong>
+                  <strong>识别结果</strong>
                   <span>一张照片同时识别装货和卸货磅单，字段悬停可定位原图区域</span>
                 </div>
                 <a-tag color="cyan">{{ currentWeighPair.departure.source }}</a-tag>
@@ -2223,6 +2202,7 @@ onBeforeUnmount(() => {
             row-key="id"
             class="dense-table"
           >
+            <template #emptyText><a-empty description="暂无磅单数据" /></template>
             <template #bodyCell="{ column, record }">
               <template v-if="column.dataIndex === 'loadingTonnage' || column.dataIndex === 'unloadingTonnage'">{{ ton(record[column.dataIndex]) }}</template>
               <template v-else-if="column.dataIndex === 'taxableOutput' || column.dataIndex === 'taxPoint' || column.dataIndex === 'profit'">
@@ -2271,7 +2251,7 @@ onBeforeUnmount(() => {
             <div class="form-pane">
               <div class="form-head">
                 <div>
-                  <strong>报销结构化字段</strong>
+                  <strong>识别结果</strong>
                   <span>金额、类型、付款对象可直接修正，审核后进入付款明细</span>
                 </div>
                 <a-tag color="cyan">{{ currentExpense.submittedAt }}</a-tag>
@@ -2343,7 +2323,6 @@ onBeforeUnmount(() => {
             <a-select v-model:value="expenseStatusFilter">
               <a-select-option value="全部">全部支付状态</a-select-option>
               <a-select-option value="未付款">未付款</a-select-option>
-              <a-select-option value="部分付款">部分付款</a-select-option>
               <a-select-option value="已付款">已付款</a-select-option>
             </a-select>
             <a-button><DownloadOutlined />导出付款明细表</a-button>
@@ -2357,6 +2336,7 @@ onBeforeUnmount(() => {
             row-key="id"
             class="dense-table"
           >
+            <template #emptyText><a-empty description="暂无付款明细数据" /></template>
             <template #bodyCell="{ column, record }">
               <template v-if="column.dataIndex === 'amount'">{{ money(record.amount) }}</template>
               <template v-else-if="column.dataIndex === 'payStatus'"><a-tag :color="statusColor(record.payStatus)">{{ record.payStatus }}</a-tag></template>
@@ -2402,6 +2382,7 @@ onBeforeUnmount(() => {
                 row-key="id"
                 class="dense-table inner-table"
               >
+                <template #emptyText><a-empty description="暂无磅单记录" /></template>
                 <template #bodyCell="{ column, record }">
                   <template v-if="column.dataIndex === 'unloadingTonnage'">{{ ton(record.unloadingTonnage) }}</template>
                   <template v-else-if="column.dataIndex === 'taxableOutput' || column.dataIndex === 'profit'">
@@ -2424,6 +2405,7 @@ onBeforeUnmount(() => {
                 row-key="id"
                 class="dense-table inner-table"
               >
+                <template #emptyText><a-empty description="暂无报销费用记录" /></template>
                 <template #bodyCell="{ column, record }">
                   <template v-if="column.dataIndex === 'amount'">{{ money(record.amount) }}</template>
                   <template v-else-if="column.dataIndex === 'payStatus'"><a-tag :color="statusColor(record.payStatus)">{{ record.payStatus }}</a-tag></template>
@@ -2447,6 +2429,9 @@ onBeforeUnmount(() => {
         </section>
 
         <section v-else-if="activePage === 'projectManage'" class="content project-manage-screen">
+          <div class="review-back-bar">
+            <a-button @click="backFromProjectManage"><LeftOutlined />返回</a-button>
+          </div>
           <div class="project-manage-layout">
             <section class="manage-panel manage-table-panel">
               <div class="manage-panel-head">
@@ -2495,7 +2480,6 @@ onBeforeUnmount(() => {
                       </td>
                       <td>
                         <div class="employee-mini-row">
-                          <span><TeamOutlined /> TMS {{ project.tmsEmployees.length }}</span>
                           <span><MessageOutlined /> 微信群 {{ project.wechatEmployees.length }}</span>
                         </div>
                         <em v-if="project.pendingTotal > 0">待审核 {{ project.pendingTotal }} 条</em>
@@ -2576,10 +2560,6 @@ onBeforeUnmount(() => {
                   </div>
 
                   <div class="employee-tabs create-tabs">
-                    <button type="button" :class="{ active: projectEditorTab === 'TMS' }" @click="projectEditorTab = 'TMS'">
-                      数据员工（TMS）
-                      <b>{{ projectEditorForm.tmsEmployeeIds.length }}</b>
-                    </button>
                     <button type="button" :class="{ active: projectEditorTab === '微信群' }" @click="projectEditorTab = '微信群'">
                       数据员工（微信群）
                       <b>{{ projectEditorForm.wechatEmployeeIds.length }}</b>
@@ -2701,17 +2681,6 @@ onBeforeUnmount(() => {
                 <div><span>当前月利润</span><strong :class="{ danger: selectedProjectManagementRow.profit < 0 }">{{ money(selectedProjectManagementRow.profit) }}</strong></div>
               </div>
               <div class="profile-source-section">
-                <h4>数据员工（TMS）</h4>
-                <div v-if="selectedProjectManagementRow.tmsEmployees.length" class="source-card-list">
-                  <div v-for="employee in selectedProjectManagementRow.tmsEmployees" :key="employee.id" class="source-card">
-                    <strong>{{ employee.name }}</strong>
-                    <span>{{ employee.description }}</span>
-                    <a-tag :color="employeeStatusColor(employee.status)">{{ employee.status }}</a-tag>
-                  </div>
-                </div>
-                <p v-else class="muted">暂未绑定 TMS 数据员工。</p>
-              </div>
-              <div class="profile-source-section">
                 <h4>数据员工（微信群）</h4>
                 <div v-if="selectedProjectManagementRow.wechatEmployees.length" class="source-card-list">
                   <div v-for="employee in selectedProjectManagementRow.wechatEmployees" :key="employee.id" class="source-card">
@@ -2771,6 +2740,7 @@ onBeforeUnmount(() => {
                 row-key="id"
                 class="dense-table project-vehicle-table"
               >
+                <template #emptyText><a-empty description="暂无车辆数据" /></template>
                 <template #bodyCell="{ column, record }">
                   <template v-if="column.dataIndex === 'projectId'">{{ projectName(record.projectId) }}</template>
                   <template v-else-if="column.dataIndex === 'revenue' || column.dataIndex === 'cost' || column.dataIndex === 'profit'">
@@ -2811,11 +2781,16 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="right-card">
-            <h3>按司机汇总</h3>
-            <div v-for="item in expenseDriverSummary" :key="item.driver" class="summary-line">
-              <span>{{ item.driver }}</span>
-              <b>{{ money(item.amount) }}</b>
-            </div>
+            <h3 class="collapsible-head" @click="driverSummaryExpanded = !driverSummaryExpanded">
+              <span>按司机汇总</span>
+              <component :is="driverSummaryExpanded ? DownOutlined : RightOutlined" />
+            </h3>
+            <template v-if="driverSummaryExpanded">
+              <div v-for="item in expenseDriverSummary" :key="item.driver" class="summary-line">
+                <span>{{ item.driver }}</span>
+                <b>{{ money(item.amount) }}</b>
+              </div>
+            </template>
           </div>
         </template>
         <template v-else>

@@ -122,7 +122,6 @@ const columns = [
   { title: '付款日期', dataIndex: 'paymentDate', width: 108, sorter: (a: MaintenanceRecord, b: MaintenanceRecord) => (a.paymentDate ?? '').localeCompare(b.paymentDate ?? '') },
   { title: '付款状态', dataIndex: 'payStatus', width: 100 },
   { title: '备注', dataIndex: 'remark', width: 140 },
-  { title: '期间', dataIndex: 'period', width: 72 },
   { title: '凭证', dataIndex: 'images', width: 76 },
   { title: '操作', dataIndex: 'action', fixed: 'right', width: 200 }
 ];
@@ -208,43 +207,53 @@ function importTable() {
   message.info('上传维修清单 Excel/CSV 导入，自动匹配列名（Demo 模拟）');
 }
 
-// 导入图片识别流程：上传图片 → OCR 识别草稿 → 审核修改 → 确认导入
+// 批量导入图片识别流程：上传多张图片 → 逐张 OCR 识别草稿 → 批量审核修改 → 批量导入
 const importReviewVisible = ref(false);
-const importDraft = reactive<Record<string, any>>({});
+const importDrafts = ref<Record<string, any>[]>([]);
+const importSelectedKeys = ref<number[]>([]);
 function importImage() {
-  // Demo：模拟一张定点维修收据 OCR 识别结果
-  Object.assign(importDraft, {
-    image: expenseImages[3],
-    date: '2026-06-28',
-    vendor: '高速汽配',
-    vehiclePlate: '赣J0587D',
-    description: '更换刹车片 + 打黄油',
-    amount: 480,
-    remark: 'OCR 识别，请核对修改后导入'
-  });
+  // Demo：模拟一次批量上传多张定点维修收据的 OCR 识别结果
+  const ocr = [
+    { image: expenseImages[3], date: '2026-06-28', vendor: '高速汽配', vehiclePlate: '赣J0587D', description: '更换刹车片 + 打黄油', amount: 480, remark: 'OCR 识别，请核对' },
+    { image: expenseImages[1], date: '2026-06-28', vendor: '鑫源轮胎', vehiclePlate: '赣J0521D', description: '更换后左轮胎一条', amount: 950, remark: 'OCR 识别，请核对' },
+    { image: expenseImages[4], date: '2026-06-27', vendor: '顺达底盘', vehiclePlate: '赣J0533D', description: '底盘悬挂减震更换', amount: 1680, remark: 'OCR 识别，请核对' }
+  ];
+  importDrafts.value = ocr.map((d, i) => ({ key: i, ...d }));
+  importSelectedKeys.value = importDrafts.value.map((d) => d.key);
   importReviewVisible.value = true;
 }
+function removeImportDraft(key: number) {
+  importDrafts.value = importDrafts.value.filter((d) => d.key !== key);
+  importSelectedKeys.value = importSelectedKeys.value.filter((k) => k !== key);
+}
+// 批量审核并导入：仅导入勾选且校验通过的草稿
 function confirmImport() {
-  if (!importDraft.date || !importDraft.vehiclePlate || !importDraft.description || importDraft.amount == null) {
-    message.warning('日期、车牌、内容、支出金额为必填项');
+  const chosen = importDrafts.value.filter((d) => importSelectedKeys.value.includes(d.key));
+  if (!chosen.length) {
+    message.warning('请至少勾选一条记录');
     return;
   }
-  records.value = [
+  const invalid = chosen.some((d) => !d.date || !d.vehiclePlate || !d.description || d.amount == null);
+  if (invalid) {
+    message.warning('勾选记录的日期、车牌、内容、支出金额均为必填');
+    return;
+  }
+  const added = chosen.map((d) =>
     make({
       dataSource: 'image_ocr',
       id: `MT_${Math.round(Math.random() * 1e9)}`,
-      date: importDraft.date,
-      vendor: importDraft.vendor,
-      vehiclePlate: importDraft.vehiclePlate,
-      description: importDraft.description,
-      amount: Number(importDraft.amount) || 0,
-      remark: importDraft.remark,
-      images: importDraft.image ? [importDraft.image] : []
-    }),
-    ...records.value
-  ];
+      date: d.date,
+      vendor: d.vendor,
+      vehiclePlate: d.vehiclePlate,
+      description: d.description,
+      amount: Number(d.amount) || 0,
+      remark: d.remark,
+      images: d.image ? [d.image] : []
+    })
+  );
+  records.value = [...added, ...records.value];
   importReviewVisible.value = false;
-  message.success('图片识别记录已审核并导入成功');
+  message.success(`已批量审核并导入 ${added.length} 条维修记录`);
 }
 
 const addVisible = ref(false);
@@ -270,7 +279,7 @@ function saveAdd() {
       <h2>维修费用</h2>
       <div class="toolbar-actions">
         <a-button @click="importTable"><template #icon><ImportOutlined /></template>导入定点维修表格</a-button>
-        <a-button @click="importImage"><template #icon><FileImageOutlined /></template>导入图片识别</a-button>
+        <a-button @click="importImage"><template #icon><FileImageOutlined /></template>批量导入图片</a-button>
         <a-button @click="openAdd"><template #icon><PlusOutlined /></template>手动添加</a-button>
         <a-button @click="exportRows"><template #icon><DownloadOutlined /></template>导出</a-button>
       </div>
@@ -305,6 +314,7 @@ function saveAdd() {
       class="dense-table"
       :row-selection="{ selectedRowKeys, onChange: (keys: any) => (selectedRowKeys = keys) }"
     >
+      <template #emptyText><a-empty description="暂无维修数据" /></template>
       <template #bodyCell="{ column, record }">
         <template v-if="editingId === record.id && ['date','vendor','vehiclePlate','description','amount','remark'].includes(column.dataIndex)">
           <a-input v-model:value="editDraft[column.dataIndex]" size="small" />
@@ -354,20 +364,28 @@ function saveAdd() {
       <p class="viewer-idx">{{ viewerIndex + 1 }} / {{ viewerImages.length }}</p>
     </a-modal>
 
-    <a-modal v-model:open="importReviewVisible" title="图片识别 · 审核后导入" ok-text="确认导入" cancel-text="取消" @ok="confirmImport" width="720px">
-      <div class="import-review">
-        <div class="import-image">
-          <img :src="importDraft.image" alt="维修收据" />
-          <span>OCR 原始图片</span>
-        </div>
-        <div class="add-form import-fields">
-          <label><span>日期*</span><a-input v-model:value="importDraft.date" /></label>
-          <label><span>对方账户</span><a-input v-model:value="importDraft.vendor" /></label>
-          <label><span>车牌号*</span><a-input v-model:value="importDraft.vehiclePlate" /></label>
-          <label><span>支出金额*</span><a-input-number v-model:value="importDraft.amount" :min="0" style="width:100%" /></label>
-          <label class="wide"><span>内容*</span><a-input v-model:value="importDraft.description" /></label>
-          <label class="wide"><span>备注</span><a-input v-model:value="importDraft.remark" /></label>
-        </div>
+    <a-modal v-model:open="importReviewVisible" title="批量图片识别 · 审核后导入" ok-text="批量审核并导入" cancel-text="取消" @ok="confirmImport" width="960px">
+      <div class="batch-import">
+        <p class="batch-import-tip">已识别 {{ importDrafts.length }} 张图片，勾选并核对修改后批量导入（已选 {{ importSelectedKeys.length }} 条）。</p>
+        <a-checkbox-group v-model:value="importSelectedKeys" class="batch-import-list">
+          <div v-for="d in importDrafts" :key="d.key" class="batch-import-item">
+            <a-checkbox :value="d.key" class="batch-import-check" />
+            <div class="import-image">
+              <img :src="d.image" alt="维修收据" />
+              <span>OCR 图片</span>
+            </div>
+            <div class="add-form import-fields">
+              <label><span>日期*</span><a-input v-model:value="d.date" /></label>
+              <label><span>对方账户</span><a-input v-model:value="d.vendor" /></label>
+              <label><span>车牌号*</span><a-input v-model:value="d.vehiclePlate" /></label>
+              <label><span>支出金额*</span><a-input-number v-model:value="d.amount" :min="0" style="width:100%" /></label>
+              <label class="wide"><span>内容*</span><a-input v-model:value="d.description" /></label>
+              <label class="wide"><span>备注</span><a-input v-model:value="d.remark" /></label>
+            </div>
+            <a-button size="small" danger class="batch-import-remove" @click="removeImportDraft(d.key)">移除</a-button>
+          </div>
+        </a-checkbox-group>
+        <a-empty v-if="!importDrafts.length" description="暂无待导入图片" />
       </div>
     </a-modal>
 
@@ -449,7 +467,7 @@ function saveAdd() {
 }
 .import-image img {
   width: 100%;
-  max-height: 320px;
+  max-height: 200px;
   object-fit: contain;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -457,6 +475,37 @@ function saveAdd() {
 .import-image span {
   color: #6b5f70;
   font-size: 12px;
+}
+.batch-import {
+  max-height: 62vh;
+  overflow-y: auto;
+}
+.batch-import-tip {
+  margin: 0 0 12px;
+  color: #6b5f70;
+  font-size: 13px;
+}
+.batch-import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+.batch-import-item {
+  display: grid;
+  grid-template-columns: 24px 200px 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fbfbfb;
+}
+.batch-import-check {
+  margin-top: 6px;
+}
+.batch-import-remove {
+  align-self: center;
 }
 .add-form {
   display: grid;

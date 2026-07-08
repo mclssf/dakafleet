@@ -1069,6 +1069,15 @@ button.mini-result {
   font-size: 15px;
 }
 
+.collapsible-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
 .form-head span {
   display: block;
   margin-top: 3px;
