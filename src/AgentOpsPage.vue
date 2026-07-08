@@ -7,7 +7,6 @@ import {
   EditOutlined,
   FileSearchOutlined,
   MessageOutlined,
-  PlusOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
   UploadOutlined
@@ -16,7 +15,7 @@ import { message } from 'ant-design-vue';
 
 type EmployeeKind = 'TMS' | '微信群';
 type LoginType = '短信验证码' | '手机扫码' | '图形验证码' | '无验证';
-type ConfigTab = 'employees' | 'wechatGroups' | 'dataset';
+type ConfigTab = 'employees' | 'wechatGroups';
 
 interface WechatGroup {
   id: string;
@@ -58,12 +57,6 @@ interface ValidationResult {
   success: boolean;
 }
 
-interface DatasetField {
-  example: string;
-  name: string;
-  semantic: string;
-}
-
 interface TenantEnterprise {
   id: string;
   name: string;
@@ -95,7 +88,7 @@ const employeeForm = reactive({
   enterpriseId: '',
   groupSearch: '',
   groupIds: [] as string[],
-  kind: 'TMS' as EmployeeKind,
+  kind: '微信群' as EmployeeKind,
   loginType: '无验证' as LoginType,
   loginUrl: '',
   name: '',
@@ -336,67 +329,12 @@ const dataEmployees = ref<DataEmployee[]>([
 - 事件等级 -> risk_level
 - 图片引用 -> raw_image_ref`
   },
-  {
-    id: 'tms-yunzhi',
-    kind: 'TMS',
-    name: '云志合通 TMS 数据员工',
-    description: '抓取砚山储配站煤炭运输 TMS 的在途运单和回单状态。',
-    loginUrl: 'https://tms.yunzhi.demo/login',
-    loginType: '图形验证码',
-    skillVersion: 'v1.3',
-    skillUpdated: '今天 08:40',
-    skillFileName: 'yunzhi-tms-waybill.skill.md',
-    skillContent: `# 云志合通 TMS 运单映射 Skill
-
-目标：进入“运输管理 / 在途运单”页面，抓取今日在途运单明细。
-
-页面导航：
-1. 登录后进入【运输管理】。
-2. 打开【运单查询】并筛选状态=在途。
-3. 抓取运单号、车牌、承运商、起运地、目的地、预计到达时间。
-
-语义映射：
-- 运单编号 -> waybill_no
-- 车牌号码 -> vehicle_plate
-- 承运单位 -> carrier_name
-- 起运工厂 -> origin_name
-- 收货仓库 -> destination_name
-- 运输状态 -> order_status`
-  },
-  {
-    id: 'tms-qujing',
-    kind: 'TMS',
-    name: '曲靖捷运 TMS 数据员工',
-    description: '同步曲靖城建砂石配送项目的调度任务、运单状态和签收结果。',
-    loginUrl: 'https://tms.qujing-jieyun.demo/login',
-    loginType: '短信验证码',
-    skillVersion: 'v1.1',
-    skillUpdated: '07-02 15:18',
-    skillFileName: 'qujing-tms-waybill.skill.md',
-    skillContent: `# 曲靖捷运 TMS 运单映射 Skill
-
-目标：从“调度中心 / 执行中任务”抓取砂石配送运单。
-
-页面导航：
-1. 使用账号和短信验证码登录。
-2. 进入【调度中心】。
-3. 打开【执行中任务】，按更新时间倒序抓取。
-
-语义映射：
-- 任务单号 -> waybill_no
-- 司机车辆 -> vehicle_plate
-- 物流商 -> carrier_name
-- 装货点 -> origin_name
-- 卸货点 -> destination_name
-- 最新定位 -> current_location`
-  }
 ]);
 
 const selectedEmployee = computed(() => dataEmployees.value.find((employee) => employee.id === selectedEmployeeId.value) ?? dataEmployees.value[0]);
 const isEditingEmployee = computed(() => editingEmployeeId.value.length > 0);
 const employeeFormTitle = computed(() => `${isEditingEmployee.value ? '编辑' : '增加'}数据员工（${employeeForm.kind}）`);
 const employeeFormConfirmText = computed(() => (isEditingEmployee.value ? '保存' : '确认增加'));
-const tmsEmployeeCount = computed(() => dataEmployees.value.filter((employee) => employee.kind === 'TMS').length);
 const wechatEmployeeCount = computed(() => dataEmployees.value.filter((employee) => employee.kind === '微信群').length);
 const linkedWechatGroupCount = computed(() => new Set(dataEmployees.value.flatMap((employee) => (employee.kind === '微信群' ? employee.groupIds ?? [] : []))).size);
 const currentValidationLoginType = computed(() => validatingEmployee.value?.loginType ?? '无验证');
@@ -414,28 +352,10 @@ const formGroupSearchResults = computed(() => {
 });
 
 const opsMenuItems: Array<{ desc: string; icon: unknown; id: ConfigTab; label: string }> = [
-  { id: 'employees', label: '数据员工配置', desc: 'TMS、微信群、Skill 与验证', icon: TeamOutlined },
-  { id: 'wechatGroups', label: '微信群列表', desc: '底层可接入的运营微信群', icon: MessageOutlined },
-  { id: 'dataset', label: '标准数据集', desc: '字段语义、映射口径与示例', icon: FileSearchOutlined }
+  { id: 'employees', label: '数据员工配置', desc: '微信群、Skill 与验证', icon: TeamOutlined },
+  { id: 'wechatGroups', label: '微信群列表', desc: '底层可接入的运营微信群', icon: MessageOutlined }
 ];
 
-const standardFields: DatasetField[] = [
-  { name: 'source_type', semantic: '数据来源类型，用于区分 TMS 页面、微信群文字、微信群图片。', example: '微信群图片' },
-  { name: 'source_group_name', semantic: '微信群数据来源的群名称，便于追踪识别入口。', example: '云南云志合通·磅单回传群' },
-  { name: 'source_system', semantic: 'TMS 或其他系统来源名称。', example: '云志合通 TMS 数据员工' },
-  { name: 'message_time', semantic: '微信群消息发送时间或系统数据抓取时间。', example: '2026-07-03 09:42' },
-  { name: 'sender_name', semantic: '微信群消息发送人昵称，适用于费用、磅单、维修等协同场景。', example: '罗队长' },
-  { name: 'waybill_no', semantic: 'TMS 运单唯一编号，用于跨系统识别同一票运输任务。', example: 'WB202607030018' },
-  { name: 'vehicle_plate', semantic: '车辆车牌号，支持从文本、磅单图片和 TMS 字段识别。', example: '赣J03528D' },
-  { name: 'driver_name', semantic: '司机姓名或微信群中被提及的车辆驾驶员。', example: '罗明' },
-  { name: 'cargo_name', semantic: '货品、物料或运输品类名称。', example: '褐煤32' },
-  { name: 'weigh_type', semantic: '磅单类型，区分装货磅单、到货磅单或异常复磅。', example: '装货磅单' },
-  { name: 'net_weight', semantic: '磅单净重，保留数值和单位。', example: '32.94 吨' },
-  { name: 'expense_type', semantic: '费用类型，如加油费、充电费、维修费、过路费、报销费。', example: '加油费' },
-  { name: 'amount', semantic: '费用金额或账单金额。', example: '486.00' },
-  { name: 'payee', semantic: '付款对象、商户、维修厂或油站名称。', example: '华银高速口加油站' },
-  { name: 'raw_image_ref', semantic: '微信聊天图片、票据图片或磅单原图引用。', example: 'weighbridge.jpg' }
-];
 
 function groupById(groupId: string) {
   return wechatGroups.value.find((group) => group.id === groupId);
@@ -921,13 +841,9 @@ function validateEmployee() {
         <div class="ops-panel-head">
           <div>
             <h2>数据员工列表</h2>
-            <p>数据员工（微信群）和数据员工（TMS）统一展示，新增入口分开。</p>
+            <p>数据员工（微信群）统一展示与新增。</p>
           </div>
           <div class="ops-actions">
-            <a-button @click="openCreateEmployeeModal('TMS')">
-              <template #icon><PlusOutlined /></template>
-              增加数据员工（TMS）
-            </a-button>
             <a-button type="primary" @click="openCreateEmployeeModal('微信群')">
               <template #icon><MessageOutlined /></template>
               增加数据员工（微信群）
@@ -1090,36 +1006,6 @@ function validateEmployee() {
       </div>
           </section>
         </template>
-
-        <template v-else>
-          <section class="ops-panel dataset-panel">
-            <div class="ops-panel-head">
-              <div>
-                <h2>标准数据集</h2>
-                <p>数据员工（TMS）和数据员工（微信群）识别结果统一映射到这里，便于后续审核、报表和追溯。</p>
-              </div>
-              <a-tag color="default">{{ standardFields.length }} 个字段</a-tag>
-            </div>
-            <div class="dataset-table-wrap">
-              <table class="ops-table dataset-table">
-                <thead>
-                  <tr>
-                    <th>字段名称</th>
-                    <th>字段语义</th>
-                    <th>数据示例</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="field in standardFields" :key="field.name">
-                    <td><code>{{ field.name }}</code></td>
-                    <td><span>{{ field.semantic }}</span></td>
-                    <td><strong>{{ field.example }}</strong></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </template>
       </section>
     </main>
 
@@ -1127,27 +1013,14 @@ function validateEmployee() {
       <div class="employee-form">
         <label>
           <span>数据员工名称</span>
-          <a-input v-model:value="employeeForm.name" :placeholder="employeeForm.kind === '微信群' ? '例如：曲靖城建砂石配送项目·费用微信群数据员工' : '例如：某客户 TMS 数据员工'" />
+          <a-input v-model:value="employeeForm.name" placeholder="例如：曲靖城建砂石配送项目·费用微信群数据员工" />
         </label>
         <label>
           <span>描述</span>
           <a-textarea v-model:value="employeeForm.description" :auto-size="{ minRows: 2, maxRows: 4 }" placeholder="说明该数据员工负责的数据来源、识别范围和业务场景" />
         </label>
 
-        <template v-if="employeeForm.kind === 'TMS'">
-          <label>
-            <span>登录地址</span>
-            <a-input v-model:value="employeeForm.loginUrl" placeholder="请输入 TMS 登录或接入地址" />
-          </label>
-          <label>
-            <span>登录方式</span>
-            <a-select v-model:value="employeeForm.loginType">
-              <a-select-option v-for="type in loginTypes" :key="type" :value="type">{{ type }}</a-select-option>
-            </a-select>
-          </label>
-        </template>
-
-        <div v-else class="wechat-employee-config">
+        <div class="wechat-employee-config">
           <label>
             <span>可见企业</span>
             <a-select
