@@ -1548,7 +1548,24 @@ function updateBaseValueDraft(key: keyof BaseValuesDraft, value: unknown) {
   baseValuesDraft[key] = Number(value) || 0;
 }
 
-// 切换线路时载入该线路的含税单价/司机工资
+// 某线路是否已配置过（用于下拉标记，已配置的可再次选择修改）
+function isRouteConfigured(routeKey: string) {
+  return Boolean(routeBaseValues.value[`${selectedProjectId.value}::${routeKey}`]);
+}
+
+// 当前项目已配置过的线路清单（可查看/点击载入修改）
+const configuredRouteList = computed(() => {
+  const prefix = `${selectedProjectId.value}::`;
+  return Object.entries(routeBaseValues.value)
+    .filter(([key]) => key.startsWith(prefix))
+    .map(([key, value]) => ({
+      routeKey: key.slice(prefix.length),
+      taxableUnitPrice: value.taxableUnitPrice,
+      driverSalary: value.driverSalary
+    }));
+});
+
+// 切换线路时载入该线路的含税单价/司机工资（已配置则读记录，未配置读项目默认）
 function onBaseValuesRouteChange(routeKey: string) {
   baseValuesDraft.routeKey = routeKey;
   const values = baseValuesForProject(selectedProjectId.value, routeKey);
@@ -1584,7 +1601,7 @@ function saveBaseValues() {
       taxRate: (Number(baseValuesDraft.taxRatePercent) || 0) / 100
     }
   };
-  // 含税单价、司机工资：线路级
+  // 含税单价、司机工资：当前选中线路级写入（已配置则覆盖修改）
   if (baseValuesDraft.routeKey) {
     routeBaseValues.value = {
       ...routeBaseValues.value,
@@ -2179,6 +2196,7 @@ onBeforeUnmount(() => {
             <b>货物险 {{ money(selectedProjectBaseValues.cargoInsurance) }}/趟</b>
             <b>税点 {{ Math.round(selectedProjectBaseValues.taxRate * 100) }}%</b>
             <span>含税单价、司机工资按线路分别配置</span>
+            <b class="configured-count">已配置线路 {{ configuredRouteList.length }} / {{ weighRouteOptions.length }} 条</b>
             <span>含税产值 = 卸货吨位 × 含税单价；利润 = 含税产值 - 货物险 - 司机工资 - 税点</span>
             <a-button size="small" @click="openBaseValuesModal">按线路配置</a-button>
           </div>
@@ -2841,7 +2859,14 @@ onBeforeUnmount(() => {
         <label class="base-route-label">
           <span>选择线路</span>
           <a-select :value="baseValuesDraft.routeKey" @change="onBaseValuesRouteChange">
-            <a-select-option v-for="route in weighRouteOptions" :key="route.value" :value="route.value">{{ route.label }}</a-select-option>
+            <a-select-option v-for="route in weighRouteOptions" :key="route.value" :value="route.value">
+              <span class="route-option">
+                <span class="route-option-name">{{ route.label }}</span>
+                <a-tag :color="isRouteConfigured(route.value) ? 'green' : 'default'" class="route-option-tag">
+                  {{ isRouteConfigured(route.value) ? '已配置' : '未配置' }}
+                </a-tag>
+              </span>
+            </a-select-option>
           </a-select>
         </label>
         <div class="base-section-title">线路级（各线路不同）</div>
@@ -2862,6 +2887,21 @@ onBeforeUnmount(() => {
           <span>税点</span>
           <a-input-number :value="baseValuesDraft.taxRatePercent" :min="0" :max="100" :precision="2" addon-after="%" @update:value="updateBaseValueDraft('taxRatePercent', $event)" />
         </label>
+
+        <div class="base-section-title">已配置线路 {{ configuredRouteList.length }} 条（点击可查看修改）</div>        <div class="base-configured-list">
+          <button
+            v-for="item in configuredRouteList"
+            :key="item.routeKey"
+            type="button"
+            class="base-configured-row"
+            :class="{ active: baseValuesDraft.routeKey === item.routeKey }"
+            @click="onBaseValuesRouteChange(item.routeKey)"
+          >
+            <span class="base-configured-name" :title="item.routeKey">{{ item.routeKey }}</span>
+            <em>含税单价 {{ item.taxableUnitPrice }} 元/吨 · 司机工资 {{ item.driverSalary }} 元/趟</em>
+          </button>
+          <p v-if="!configuredRouteList.length" class="muted">暂无已配置线路，选择上方线路填写后保存即可。</p>
+        </div>
       </div>
     </a-modal>
   </a-config-provider>

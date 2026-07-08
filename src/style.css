@@ -1329,6 +1329,66 @@ button.mini-result {
   grid-column: 1 / -1;
 }
 
+.route-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.route-option-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-option-tag {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.configured-count {
+  color: #0f766e !important;
+}
+
+.base-configured-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+.base-configured-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px;
+  border: 1px solid #d7e0e7;
+  border-radius: 8px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.base-configured-row:hover,
+.base-configured-row.active {
+  border-color: rgba(15, 118, 110, 0.5);
+  background: #ecf8f5;
+}
+
+.base-configured-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #08090c;
+}
+
+.base-configured-row em {
+  font-style: normal;
+  color: #6b5f70;
+  font-size: 12px;
+}
+
 .base-values-modal .base-section-title {
   grid-column: 1 / -1;
   margin-top: 4px;
