@@ -20,7 +20,7 @@ export const weighFieldBoxes: FieldBox[] = [
   { key: 'tare', label: '皮重', x: 62, y: 41, w: 7, h: 5 },
   { key: 'net', label: '净重', x: 76, y: 41, w: 8, h: 5 },
   { key: 'carrier', label: '承运单位', x: 20, y: 48, w: 27, h: 6 },
-  { key: 'vehiclePlate', label: '车号', x: 55, y: 49, w: 13, h: 5 },
+  { key: 'vehiclePlate', label: '车牌号', x: 55, y: 49, w: 13, h: 5 },
   { key: 'driver', label: '驾驶员', x: 75, y: 48, w: 11, h: 7 },
   { key: 'remark', label: '备注', x: 19, y: 58, w: 23, h: 5 },
   { key: 'dateTime', label: '磅单时间', x: 48, y: 69, w: 20, h: 5 }
@@ -28,7 +28,7 @@ export const weighFieldBoxes: FieldBox[] = [
 
 export const expenseFieldBoxes: FieldBox[] = [
   { key: 'driver', label: '司机', x: 30, y: 24, w: 18, h: 4.5 },
-  { key: 'vehiclePlate', label: '车号', x: 31, y: 20, w: 22, h: 4.5 },
+  { key: 'vehiclePlate', label: '车牌号', x: 31, y: 20, w: 22, h: 4.5 },
   { key: 'type', label: '报销类型', x: 24, y: 40, w: 18, h: 4.5 },
   { key: 'item', label: '报销事项', x: 24, y: 37, w: 42, h: 14 },
   { key: 'amount', label: '金额', x: 52, y: 50, w: 16, h: 5 },
@@ -776,7 +776,7 @@ export const reimbursements: Expense[] = [
     auditStatus: '已通过',
     anomalies: [],
     confidence: 0.94,
-    message: '靖西高速通行费168元，车号赣J03528D。',
+    message: '靖西高速通行费168元，车牌号赣J03528D。',
     fieldBoxes: expenseFieldBoxes
   },
   {

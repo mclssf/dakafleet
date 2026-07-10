@@ -8,10 +8,10 @@ const DEFAULT_CAPACITY = 430;
 
 const sourceLabels: Record<RecordDataSource, string> = {
   payment_sync: '付款明细同步',
-  upstream_import: '上游系统导入',
+  upstream_import: '批量导入',
   manual: '手动添加',
   wechat_robot: '微信机器人',
-  table_import: '表格导入',
+  table_import: '批量导入',
   image_ocr: '图片识别'
 };
 
@@ -47,16 +47,16 @@ function make(partial: Partial<ChargingRecord>): ChargingRecord {
 }
 
 const seed: Partial<ChargingRecord>[] = [
-  { id: 'CR_001', dataSource: 'upstream_import', date: '2026-06-13', vehiclePlate: '粤B4147D', startSOC: 29, endSOC: 98, chargingKwh: 271.14, totalAmount: 12964.7, serviceFee: 67.78, topUpAmount: 211.38, chargingStation: '广福铺光大车营量充电站', batteryCapacity: 430 },
-  { id: 'CR_002', dataSource: 'upstream_import', date: '2026-06-14', vehiclePlate: '粤B4152D', startSOC: 18, endSOC: 96, chargingKwh: 334.2, totalAmount: 261.0, serviceFee: 40.1, chargingStation: '沙井高速充电站', batteryCapacity: 430 },
-  { id: 'CR_003', dataSource: 'upstream_import', date: '2026-06-15', vehiclePlate: '粤B4163D', startSOC: 35, endSOC: 90, chargingKwh: 285.5, totalAmount: 222.7, serviceFee: 35.0, chargingStation: '龙华服务区充电站', batteryCapacity: 430 },
-  { id: 'CR_004', dataSource: 'upstream_import', date: '2026-06-16', vehiclePlate: '粤B4147D', startSOC: 22, endSOC: 88, chargingKwh: 310.6, totalAmount: 245.4, serviceFee: 38.5, chargingStation: '广福铺光大车营量充电站', batteryCapacity: 430 },
-  { id: 'CR_005', dataSource: 'upstream_import', date: '2026-06-17', vehiclePlate: '粤B4171D', startSOC: 40, endSOC: 99, chargingKwh: 210.3, totalAmount: 168.2, serviceFee: 26.4, chargingStation: '观澜光大充电站', batteryCapacity: 430 },
+  { id: 'CR_001', dataSource: 'table_import', date: '2026-06-13', vehiclePlate: '粤B4147D', startSOC: 29, endSOC: 98, chargingKwh: 271.14, totalAmount: 12964.7, serviceFee: 67.78, topUpAmount: 211.38, chargingStation: '广福铺光大车营量充电站', batteryCapacity: 430 },
+  { id: 'CR_002', dataSource: 'table_import', date: '2026-06-14', vehiclePlate: '粤B4152D', startSOC: 18, endSOC: 96, chargingKwh: 334.2, totalAmount: 261.0, serviceFee: 40.1, chargingStation: '沙井高速充电站', batteryCapacity: 430 },
+  { id: 'CR_003', dataSource: 'table_import', date: '2026-06-15', vehiclePlate: '粤B4163D', startSOC: 35, endSOC: 90, chargingKwh: 285.5, totalAmount: 222.7, serviceFee: 35.0, chargingStation: '龙华服务区充电站', batteryCapacity: 430 },
+  { id: 'CR_004', dataSource: 'table_import', date: '2026-06-16', vehiclePlate: '粤B4147D', startSOC: 22, endSOC: 88, chargingKwh: 310.6, totalAmount: 245.4, serviceFee: 38.5, chargingStation: '广福铺光大车营量充电站', batteryCapacity: 430 },
+  { id: 'CR_005', dataSource: 'table_import', date: '2026-06-17', vehiclePlate: '粤B4171D', startSOC: 40, endSOC: 99, chargingKwh: 210.3, totalAmount: 168.2, serviceFee: 26.4, chargingStation: '观澜光大充电站', batteryCapacity: 430 },
   // 异常：占比 > 10%
-  { id: 'CR_006', dataSource: 'upstream_import', date: '2026-06-18', vehiclePlate: '粤B4152D', startSOC: 20, endSOC: 95, chargingKwh: 250.0, totalAmount: 196.0, serviceFee: 31.0, chargingStation: '沙井高速充电站', batteryCapacity: 430 },
-  { id: 'CR_007', dataSource: 'upstream_import', date: '2026-06-19', vehiclePlate: '粤B4188D', startSOC: 30, endSOC: 92, chargingKwh: 330.0, totalAmount: 258.0, serviceFee: 40.0, chargingStation: '福永充电站', batteryCapacity: 430 },
+  { id: 'CR_006', dataSource: 'table_import', date: '2026-06-18', vehiclePlate: '粤B4152D', startSOC: 20, endSOC: 95, chargingKwh: 250.0, totalAmount: 196.0, serviceFee: 31.0, chargingStation: '沙井高速充电站', batteryCapacity: 430 },
+  { id: 'CR_007', dataSource: 'table_import', date: '2026-06-19', vehiclePlate: '粤B4188D', startSOC: 30, endSOC: 92, chargingKwh: 330.0, totalAmount: 258.0, serviceFee: 40.0, chargingStation: '福永充电站', batteryCapacity: 430 },
   // 异常：占比 5%~10%
-  { id: 'CR_008', dataSource: 'upstream_import', date: '2026-06-20', vehiclePlate: '粤B4163D', startSOC: 25, endSOC: 90, chargingKwh: 264.0, totalAmount: 208.0, serviceFee: 32.0, chargingStation: '龙华服务区充电站', batteryCapacity: 430 },
+  { id: 'CR_008', dataSource: 'table_import', date: '2026-06-20', vehiclePlate: '粤B4163D', startSOC: 25, endSOC: 90, chargingKwh: 264.0, totalAmount: 208.0, serviceFee: 32.0, chargingStation: '龙华服务区充电站', batteryCapacity: 430 },
   { id: 'CR_009', dataSource: 'payment_sync', sourceRefId: 'EXP_20260621_012', date: '2026-06-21', vehiclePlate: '粤B4171D', startSOC: 33, endSOC: 89, chargingKwh: 253.0, totalAmount: 199.0, serviceFee: 30.0, chargingStation: '观澜光大充电站', batteryCapacity: 430 },
   { id: 'CR_010', dataSource: 'payment_sync', sourceRefId: 'EXP_20260622_020', date: '2026-06-22', vehiclePlate: '粤B4188D', startSOC: 28, endSOC: 91, chargingKwh: 275.0, totalAmount: 216.0, serviceFee: 34.0, chargingStation: '福永充电站', batteryCapacity: 430 },
   // 付款明细同步 - 数据不完整（缺 SOC）
@@ -230,9 +230,9 @@ function saveAdd() {
       </a-input>
       <a-select v-model:value="sourceFilter" style="width: 100%">
         <a-select-option value="全部">全部来源</a-select-option>
-        <a-select-option value="payment_sync">付款明细同步</a-select-option>
-        <a-select-option value="upstream_import">上游系统导入</a-select-option>
+        <a-select-option value="table_import">批量导入</a-select-option>
         <a-select-option value="manual">手动添加</a-select-option>
+        <a-select-option value="payment_sync">付款明细同步</a-select-option>
       </a-select>
     </div>
 

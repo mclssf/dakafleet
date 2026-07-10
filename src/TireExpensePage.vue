@@ -37,16 +37,15 @@ function make(p: Partial<TireRecord>): TireRecord {
 }
 
 const seed: Partial<TireRecord>[] = [
-  // 付款明细同步 5 条
-  { id: 'TR_001', dataSource: 'payment_sync', sourceRefId: 'PAY_20260627_015', date: '2026-06-27', vendor: '任正勇', vehiclePlate: '赣J05550D', tirePosition: 'FL', quantity: 1, unitPrice: 950, totalAmount: 1050, remark: '换一条新胎950元，急救费100元，共1050元', paymentStatus: '财务已付款', paymentDate: '2026-06-28' },
-  { id: 'TR_002', dataSource: 'payment_sync', sourceRefId: 'PAY_20260626_011', date: '2026-06-26', vendor: '李师傅', vehiclePlate: '赣J05521D', tirePosition: 'FR', quantity: 1, unitPrice: 920, totalAmount: 920, paymentStatus: '财务已付款', paymentDate: '2026-06-27' },
+  // 付款明细同步 4 条（付款状态跟随付款明细）
+  { id: 'TR_001', dataSource: 'payment_sync', sourceRefId: 'PAY_20260627_015', date: '2026-06-27', vendor: '任正勇', vehiclePlate: '赣J05550D', tirePosition: 'FL', quantity: 1, unitPrice: 950, totalAmount: 1050, remark: '换一条新胎950元，急救费100元，共1050元', paymentStatus: '已付', paymentDate: '2026-06-28' },
+  { id: 'TR_002', dataSource: 'payment_sync', sourceRefId: 'PAY_20260626_011', date: '2026-06-26', vendor: '李师傅', vehiclePlate: '赣J05521D', tirePosition: 'FR', quantity: 1, unitPrice: 920, totalAmount: 920, paymentStatus: '已付', paymentDate: '2026-06-27' },
   { id: 'TR_003', dataSource: 'payment_sync', sourceRefId: 'PAY_20260625_009', date: '2026-06-25', vendor: '鑫源轮胎', vehiclePlate: '赣J05533D', tirePosition: 'RL', quantity: 2, unitPrice: 900, totalAmount: 1800, paymentStatus: '已付', paymentDate: '2026-06-26' },
-  { id: 'TR_004', dataSource: 'payment_sync', sourceRefId: 'PAY_20260624_007', date: '2026-06-24', vendor: '任正勇', vehiclePlate: '赣J05540D', tirePosition: 'RR', quantity: 1, unitPrice: 980, totalAmount: 980, paymentStatus: '已付', paymentDate: '2026-06-25' },
-  { id: 'TR_005', dataSource: 'payment_sync', sourceRefId: 'PAY_20260623_005', date: '2026-06-23', vendor: '李师傅', vehiclePlate: '赣J05551D', tirePosition: 'FL', quantity: 1, unitPrice: 950, totalAmount: 1050, paymentStatus: '未付' },
-  // 司机群拍照上报 3 条（部分缺轮胎编号）
-  { id: 'TR_006', dataSource: 'wechat_robot', date: '2026-06-22', vendor: '路边轮胎店', vehiclePlate: '赣J05562D', tirePosition: 'FR', quantity: 1, unitPrice: 940, totalAmount: 940, tireNumber: null, images: [expenseImages[1]], paymentStatus: '未付' },
-  { id: 'TR_007', dataSource: 'wechat_robot', date: '2026-06-21', vendor: '路边轮胎店', vehiclePlate: '赣J05573D', tirePosition: 'RL', quantity: 2, unitPrice: 910, totalAmount: 1820, tireNumber: null, images: [expenseImages[2]], paymentStatus: '未付' },
-  { id: 'TR_008', dataSource: 'wechat_robot', date: '2026-06-20', vendor: '鑫源轮胎', vehiclePlate: '赣J05584D', tirePosition: 'RR', quantity: 1, unitPrice: 960, totalAmount: 960, tireNumber: 'LT20260620A', images: [expenseImages[3]], paymentStatus: '已付', paymentDate: '2026-06-21' },
+  { id: 'TR_004', dataSource: 'payment_sync', sourceRefId: 'PAY_20260623_005', date: '2026-06-23', vendor: '李师傅', vehiclePlate: '赣J05551D', tirePosition: 'FL', quantity: 1, unitPrice: 950, totalAmount: 1050, paymentStatus: '未付' },
+  // 批量导入 3 条（部分缺轮胎编号）
+  { id: 'TR_006', dataSource: 'table_import', date: '2026-06-22', vendor: '路边轮胎店', vehiclePlate: '赣J05562D', tirePosition: 'FR', quantity: 1, unitPrice: 940, totalAmount: 940, tireNumber: null, images: [expenseImages[1]], paymentStatus: '未付' },
+  { id: 'TR_007', dataSource: 'table_import', date: '2026-06-21', vendor: '路边轮胎店', vehiclePlate: '赣J05573D', tirePosition: 'RL', quantity: 2, unitPrice: 910, totalAmount: 1820, tireNumber: null, images: [expenseImages[2]], paymentStatus: '未付' },
+  { id: 'TR_008', dataSource: 'table_import', date: '2026-06-20', vendor: '鑫源轮胎', vehiclePlate: '赣J05584D', tirePosition: 'RR', quantity: 1, unitPrice: 960, totalAmount: 960, tireNumber: 'LT20260620A', images: [expenseImages[3]], paymentStatus: '已付', paymentDate: '2026-06-21' },
   // 手动添加 2 条
   { id: 'TR_009', dataSource: 'manual', date: '2026-06-19', vendor: '任正勇', vehiclePlate: '赣J05595D', tirePosition: 'FL', quantity: 1, unitPrice: 950, totalAmount: 950, tireNumber: 'LT20260619B', receiptNo: 'SJ-0619', paymentStatus: '已付', paymentDate: '2026-06-20' },
   { id: 'TR_010', dataSource: 'manual', date: '2026-06-18', vendor: '鑫源轮胎', vehiclePlate: '赣J05506D', tirePosition: 'SPARE', quantity: 1, unitPrice: 1000, totalAmount: 1000, tireNumber: 'LT20260618C', receiptNo: 'SJ-0618', paymentStatus: '已付', paymentDate: '2026-06-19' }
@@ -58,9 +57,23 @@ const dateRange = ref<string[]>([]);
 const keyword = ref('');
 const posFilter = ref<'全部' | Exclude<TirePosition, null>>('全部');
 const payFilter = ref<'全部' | '已付' | '未付'>('全部');
+const sourceFilter = ref<'全部' | 'table_import' | 'manual' | 'payment_sync'>('全部');
 const selectedRowKeys = ref<string[]>([]);
 const editingId = ref('');
 const editDraft = reactive<Record<string, any>>({});
+
+const sourceLabelMap: Record<string, string> = {
+  table_import: '批量导入',
+  wechat_robot: '批量导入',
+  manual: '手动添加',
+  payment_sync: '付款明细同步'
+};
+function sourceLabel(r: TireRecord) {
+  return sourceLabelMap[r.dataSource] ?? '手动添加';
+}
+function isSync(r: TireRecord) {
+  return r.dataSource === 'payment_sync';
+}
 
 const filtered = computed(() =>
   records.value.filter((r) => {
@@ -68,9 +81,11 @@ const filtered = computed(() =>
     const kw = keyword.value.trim();
     const inKw = !kw || [r.vendor, r.vehiclePlate, r.tireNumber ?? '', r.remark].some((v) => (v ?? '').includes(kw));
     const inPos = posFilter.value === '全部' || r.tirePosition === posFilter.value;
-    const paid = r.paymentStatus === '已付' || r.paymentStatus === '财务已付款';
+    const paid = r.paymentStatus === '已付';
     const inPay = payFilter.value === '全部' || (payFilter.value === '已付' ? paid : !paid);
-    return inDate && inKw && inPos && inPay;
+    const src = r.dataSource === 'wechat_robot' ? 'table_import' : r.dataSource;
+    const inSource = sourceFilter.value === '全部' || src === sourceFilter.value;
+    return inDate && inKw && inPos && inPay && inSource;
   })
 );
 
@@ -91,6 +106,7 @@ const stats = computed(() => {
 
 const columns = [
   { title: '日期', dataIndex: 'date', width: 96, sorter: (a: TireRecord, b: TireRecord) => a.date.localeCompare(b.date) },
+  { title: '来源', dataIndex: 'source', width: 110 },
   { title: '维修厂家', dataIndex: 'vendor', width: 110 },
   { title: '车头牌照', dataIndex: 'vehiclePlatePrefix', width: 88 },
   { title: '车牌号', dataIndex: 'vehiclePlate', width: 116 },
@@ -152,6 +168,7 @@ function removeRow(r: TireRecord) {
   });
 }
 function togglePaid(r: TireRecord) {
+  if (isSync(r)) return;
   if (r.paymentStatus === '未付') {
     r.paymentStatus = '已付';
     r.paymentDate = '2026-06-30';
@@ -187,12 +204,12 @@ function batchDelete() {
 }
 function batchPaid() {
   records.value.forEach((r) => {
-    if (selectedRowKeys.value.includes(r.id) && r.paymentStatus === '未付') {
+    if (selectedRowKeys.value.includes(r.id) && !isSync(r) && r.paymentStatus === '未付') {
       r.paymentStatus = '已付';
       r.paymentDate = '2026-06-30';
     }
   });
-  message.success('已批量标记已付');
+  message.success('已批量标记已付（付款明细同步记录跟随明细状态，不参与）');
 }
 function exportRows() {
   message.success(`已导出 ${filtered.value.length} 条轮胎记录（Demo 模拟）`);
@@ -246,6 +263,12 @@ function saveAdd() {
       <a-input v-model:value="keyword" placeholder="搜索维修厂家、车牌号、轮胎号、备注..." allow-clear>
         <template #prefix><SearchOutlined /></template>
       </a-input>
+      <a-select v-model:value="sourceFilter" style="width: 100%">
+        <a-select-option value="全部">全部来源</a-select-option>
+        <a-select-option value="table_import">批量导入</a-select-option>
+        <a-select-option value="manual">手动添加</a-select-option>
+        <a-select-option value="payment_sync">付款明细同步</a-select-option>
+      </a-select>
       <a-select v-model:value="posFilter" style="width: 100%">
         <a-select-option value="全部">全部位置</a-select-option>
         <a-select-option v-for="p in positionOptions" :key="p.value" :value="p.value">{{ p.label }}</a-select-option>
@@ -262,7 +285,7 @@ function saveAdd() {
       :columns="columns"
       :data-source="filtered"
       :pagination="{ pageSize: 10 }"
-      :scroll="{ x: 1760 }"
+      :scroll="{ x: 1880 }"
       row-key="id"
       class="dense-table"
       :row-selection="{ selectedRowKeys, onChange: (keys: any) => (selectedRowKeys = keys) }"
@@ -287,6 +310,7 @@ function saveAdd() {
           <a-input-number v-model:value="editDraft.totalAmount" size="small" :min="0" style="width: 92px" />
         </template>
         <template v-else-if="column.dataIndex === 'date'">{{ dt(record.date) }}</template>
+        <template v-else-if="column.dataIndex === 'source'"><a-tag color="blue">{{ sourceLabel(record) }}</a-tag></template>
         <template v-else-if="column.dataIndex === 'tirePosition'">{{ record.tirePosition ? positionLabels[record.tirePosition] : '—' }}</template>
         <template v-else-if="column.dataIndex === 'unitPrice' || column.dataIndex === 'totalAmount'">¥{{ record[column.dataIndex].toFixed(2) }}</template>
         <template v-else-if="column.dataIndex === 'tireNumber'">
@@ -309,7 +333,7 @@ function saveAdd() {
           <template v-else>
             <a-button size="small" @click="startEdit(record)"><template #icon><EditOutlined /></template></a-button>
             <a-button size="small" danger @click="removeRow(record)"><template #icon><DeleteOutlined /></template></a-button>
-            <a-button size="small" type="primary" ghost @click="togglePaid(record)">{{ record.paymentStatus === '未付' ? '标记已付' : '取消标记' }}</a-button>
+            <a-button v-if="!isSync(record)" size="small" type="primary" ghost @click="togglePaid(record)">{{ record.paymentStatus === '未付' ? '标记已付' : '取消标记' }}</a-button>
           </template>
         </template>
       </template>
@@ -368,7 +392,7 @@ function saveAdd() {
   flex-wrap: wrap;
 }
 .tire-filter {
-  grid-template-columns: 260px minmax(240px, 1fr) 150px 150px;
+  grid-template-columns: 220px minmax(200px, 1fr) 140px 130px 130px;
 }
 .batch-bar {
   position: sticky;

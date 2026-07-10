@@ -48,7 +48,8 @@ function make(p: Partial<MaintenanceRecord>): MaintenanceRecord {
     category: p.category ?? classify(description),
     reviewStatus: 'approved',
     images: p.images ?? [],
-    createdAt: p.createdAt ?? '2026-06-26T10:00:00'
+    createdAt: p.createdAt ?? '2026-06-26T10:00:00',
+    syncedPaid: p.syncedPaid
   };
 }
 
@@ -56,19 +57,19 @@ function make(p: Partial<MaintenanceRecord>): MaintenanceRecord {
 const seed: Partial<MaintenanceRecord>[] = [
   { id: 'MT_001', dataSource: 'table_import', date: '2026-06-25', vendor: '高速汽配', vehiclePlate: '赣J0587D', description: '打黄油90元', amount: 90, images: [expenseImages[0]], paymentDate: '2026-06-26' },
   { id: 'MT_002', dataSource: 'table_import', date: '2026-06-24', vendor: '鑫源轮胎', vehiclePlate: '赣J0521D', description: '更换后左轮胎一条', amount: 950 },
-  { id: 'MT_003', dataSource: 'image_ocr', date: '2026-06-23', vendor: '顺达底盘', vehiclePlate: '赣J0533D', description: '底盘大梁裂纹加固', amount: 1860, images: [expenseImages[1]] },
+  { id: 'MT_003', dataSource: 'payment_sync', sourceRefId: 'PAY_1003', date: '2026-06-23', vendor: '罗明', vehiclePlate: '赣J0533D', description: '底盘大梁裂纹加固', amount: 1860, syncedPaid: true },
   { id: 'MT_004', dataSource: 'table_import', date: '2026-06-22', vendor: '安行刹车', vehiclePlate: '赣J0540D', description: '更换刹车片刹车盘', amount: 1280, paymentDate: '2026-06-23' },
   { id: 'MT_005', dataSource: 'table_import', date: '2026-06-21', vendor: '恒达货箱', vehiclePlate: '赣J0551D', description: '货箱栏板焊接修复', amount: 760, images: [expenseImages[2]] },
-  { id: 'MT_006', dataSource: 'image_ocr', date: '2026-06-20', vendor: '光明电路', vehiclePlate: '赣J0562D', description: '更换发电机线路检修', amount: 2100, images: [expenseImages[3]] },
+  { id: 'MT_006', dataSource: 'payment_sync', sourceRefId: 'PAY_1006', date: '2026-06-20', vendor: '邓华', vehiclePlate: '赣J0562D', description: '更换发电机线路检修', amount: 2100, syncedPaid: false },
   { id: 'MT_007', dataSource: 'table_import', date: '2026-06-19', vendor: '力压液压', vehiclePlate: '赣J0573D', description: '自卸液压油泵维修', amount: 3400, paymentDate: '2026-06-20' },
   { id: 'MT_008', dataSource: 'table_import', date: '2026-06-18', vendor: '强焊电焊', vehiclePlate: '赣J0584D', description: '车架电焊加固', amount: 520 },
-  { id: 'MT_009', dataSource: 'image_ocr', date: '2026-06-17', vendor: '大修厂', vehiclePlate: '赣J0595D', description: '发动机大修整机翻新', amount: 20960, images: [expenseImages[4]] },
+  { id: 'MT_009', dataSource: 'payment_sync', sourceRefId: 'PAY_1009', date: '2026-06-17', vendor: '刘启', vehiclePlate: '赣J0595D', description: '发动机大修整机翻新', amount: 20960, syncedPaid: true },
   { id: 'MT_010', dataSource: 'table_import', date: '2026-06-16', vendor: '救援公司', vehiclePlate: '赣J0506D', description: '高速施救拖车', amount: 1500, paymentDate: '2026-06-17' },
   { id: 'MT_011', dataSource: 'table_import', date: '2026-06-15', vendor: '配件城', vehiclePlate: '赣J0517D', description: '更换滤芯润滑油耗材', amount: 380, paymentDate: '2026-06-16' },
   { id: 'MT_012', dataSource: 'table_import', date: '2026-06-14', vendor: '修理工', vehiclePlate: '赣J0528D', description: '维修工时人工费', amount: 600 },
   { id: 'MT_013', dataSource: 'table_import', date: '2026-06-13', vendor: '高速汽配', vehiclePlate: '赣J0539D', description: '补胎两条', amount: 160, images: [expenseImages[5]], paymentDate: '2026-06-14' },
   { id: 'MT_014', dataSource: 'table_import', date: '2026-06-12', vendor: '安行刹车', vehiclePlate: '赣J0540D', description: '刹车油更换', amount: 220 },
-  { id: 'MT_015', dataSource: 'image_ocr', date: '2026-06-11', vendor: '顺达底盘', vehiclePlate: '赣J0551D', description: '悬挂减震器更换', amount: 1680, images: [expenseImages[6]] },
+  { id: 'MT_015', dataSource: 'payment_sync', sourceRefId: 'PAY_1015', date: '2026-06-11', vendor: '张勇', vehiclePlate: '赣J0551D', description: '悬挂减震器更换', amount: 1680, syncedPaid: false },
   { id: 'MT_016', dataSource: 'table_import', date: '2026-06-10', vendor: '恒达货箱', vehiclePlate: '赣J0562D', description: '自卸货箱液压维修', amount: 2600, paymentDate: '2026-06-11' },
   { id: 'MT_017', dataSource: 'table_import', date: '2026-06-09', vendor: '光明电路', vehiclePlate: '赣J0573D', description: '电瓶更换', amount: 680 },
   { id: 'MT_018', dataSource: 'table_import', date: '2026-06-08', vendor: '配件城', vehiclePlate: '赣J0584D', description: '配件耗材采购', amount: 430, paymentDate: '2026-06-09' },
@@ -80,13 +81,26 @@ const records = ref<MaintenanceRecord[]>(seed.map(make));
 
 const dateRange = ref<string[]>([]);
 const keyword = ref('');
-const catFilter = ref<'全部' | MaintenanceCategory>('全部');
+const sourceFilter = ref<'全部' | 'table_import' | 'manual' | 'payment_sync'>('全部');
 const selectedRowKeys = ref<string[]>([]);
 const editingId = ref('');
 const editDraft = reactive<Record<string, any>>({});
 
+const sourceLabelMap: Record<string, string> = {
+  table_import: '批量导入',
+  image_ocr: '批量导入',
+  manual: '手动添加',
+  payment_sync: '付款明细同步'
+};
+function sourceLabel(r: MaintenanceRecord) {
+  return sourceLabelMap[r.dataSource] ?? '手动添加';
+}
+function isSync(r: MaintenanceRecord) {
+  return r.dataSource === 'payment_sync';
+}
+// 付款明细同步：付款状态跟随付款明细（syncedPaid）；其它来源用 paymentDate 手动标记
 function isPaid(r: MaintenanceRecord) {
-  return !!r.paymentDate;
+  return isSync(r) ? !!r.syncedPaid : !!r.paymentDate;
 }
 
 const filtered = computed(() =>
@@ -94,8 +108,9 @@ const filtered = computed(() =>
     const inDate = dateRange.value.length !== 2 || (r.date >= dateRange.value[0] && r.date <= dateRange.value[1]);
     const kw = keyword.value.trim();
     const inKw = !kw || [r.vendor, r.vehiclePlate, r.description, r.remark].some((v) => (v ?? '').includes(kw));
-    const inCat = catFilter.value === '全部' || r.category === catFilter.value;
-    return inDate && inKw && inCat;
+    const src = r.dataSource === 'image_ocr' ? 'table_import' : r.dataSource;
+    const inSource = sourceFilter.value === '全部' || src === sourceFilter.value;
+    return inDate && inKw && inSource;
   })
 );
 
@@ -114,10 +129,10 @@ const stats = computed(() => {
 
 const columns = [
   { title: '日期', dataIndex: 'date', width: 96, sorter: (a: MaintenanceRecord, b: MaintenanceRecord) => a.date.localeCompare(b.date) },
+  { title: '来源', dataIndex: 'source', width: 110 },
   { title: '对方账户', dataIndex: 'vendor', width: 120 },
   { title: '车牌号', dataIndex: 'vehiclePlate', width: 108 },
   { title: '内容', dataIndex: 'description', width: 200 },
-  { title: '分类', dataIndex: 'category', width: 100 },
   { title: '支出金额', dataIndex: 'amount', width: 108, sorter: (a: MaintenanceRecord, b: MaintenanceRecord) => a.amount - b.amount },
   { title: '付款日期', dataIndex: 'paymentDate', width: 108, sorter: (a: MaintenanceRecord, b: MaintenanceRecord) => (a.paymentDate ?? '').localeCompare(b.paymentDate ?? '') },
   { title: '付款状态', dataIndex: 'payStatus', width: 100 },
@@ -160,9 +175,10 @@ function removeRow(r: MaintenanceRecord) {
     }
   });
 }
-// 标记已付 / 取消标记
+// 标记已付 / 取消标记（仅非同步来源可操作）
 function togglePaid(r: MaintenanceRecord) {
-  if (isPaid(r)) {
+  if (isSync(r)) return;
+  if (r.paymentDate) {
     r.paymentDate = null;
     message.success('已取消标记');
   } else {
@@ -196,9 +212,9 @@ function batchDelete() {
 }
 function batchPaid() {
   records.value.forEach((r) => {
-    if (selectedRowKeys.value.includes(r.id) && !isPaid(r)) r.paymentDate = '2026-06-30';
+    if (selectedRowKeys.value.includes(r.id) && !isSync(r) && !r.paymentDate) r.paymentDate = '2026-06-30';
   });
-  message.success('已批量标记已付');
+  message.success('已批量标记已付（付款明细同步记录跟随明细状态，不参与）');
 }
 function exportRows() {
   message.success(`已导出 ${filtered.value.length} 条维修记录（Demo 模拟）`);
@@ -240,7 +256,7 @@ function confirmImport() {
   }
   const added = chosen.map((d) =>
     make({
-      dataSource: 'image_ocr',
+      dataSource: 'table_import',
       id: `MT_${Math.round(Math.random() * 1e9)}`,
       date: d.date,
       vendor: d.vendor,
@@ -298,9 +314,11 @@ function saveAdd() {
       <a-input v-model:value="keyword" placeholder="搜索对方账户、车牌号、内容、备注..." allow-clear>
         <template #prefix><SearchOutlined /></template>
       </a-input>
-      <a-select v-model:value="catFilter" style="width: 100%">
-        <a-select-option value="全部">全部分类</a-select-option>
-        <a-select-option v-for="c in categoryOptions" :key="c" :value="c">{{ catLabel(c) }}</a-select-option>
+      <a-select v-model:value="sourceFilter" style="width: 100%">
+        <a-select-option value="全部">全部来源</a-select-option>
+        <a-select-option value="table_import">批量导入</a-select-option>
+        <a-select-option value="manual">手动添加</a-select-option>
+        <a-select-option value="payment_sync">付款明细同步</a-select-option>
       </a-select>
     </div>
 
@@ -319,15 +337,10 @@ function saveAdd() {
         <template v-if="editingId === record.id && ['date','vendor','vehiclePlate','description','amount','remark'].includes(column.dataIndex)">
           <a-input v-model:value="editDraft[column.dataIndex]" size="small" />
         </template>
-        <template v-else-if="editingId === record.id && column.dataIndex === 'category'">
-          <a-select v-model:value="editDraft.category" size="small" style="width: 90px">
-            <a-select-option v-for="c in categoryOptions" :key="c" :value="c">{{ catLabel(c) }}</a-select-option>
-          </a-select>
-        </template>
         <template v-else-if="column.dataIndex === 'date'">{{ dt(record.date) }}</template>
+        <template v-else-if="column.dataIndex === 'source'"><a-tag color="blue">{{ sourceLabel(record) }}</a-tag></template>
         <template v-else-if="column.dataIndex === 'amount'">¥{{ record.amount.toFixed(2) }}</template>
         <template v-else-if="column.dataIndex === 'paymentDate'">{{ record.paymentDate ? dt(record.paymentDate) : '—' }}</template>
-        <template v-else-if="column.dataIndex === 'category'"><a-tag color="geekblue">{{ catLabel(record.category) }}</a-tag></template>
         <template v-else-if="column.dataIndex === 'payStatus'">
           <a-tag :color="isPaid(record) ? 'green' : 'orange'">{{ isPaid(record) ? '已付' : '未付' }}</a-tag>
         </template>
@@ -342,7 +355,7 @@ function saveAdd() {
           <template v-else>
             <a-button size="small" @click="startEdit(record)"><template #icon><EditOutlined /></template></a-button>
             <a-button size="small" danger @click="removeRow(record)"><template #icon><DeleteOutlined /></template></a-button>
-            <a-button size="small" type="primary" ghost @click="togglePaid(record)">{{ isPaid(record) ? '取消标记' : '标记已付' }}</a-button>
+            <a-button v-if="!isSync(record)" size="small" type="primary" ghost @click="togglePaid(record)">{{ isPaid(record) ? '取消标记' : '标记已付' }}</a-button>
           </template>
         </template>
       </template>
@@ -395,12 +408,7 @@ function saveAdd() {
         <label><span>对方账户</span><a-input v-model:value="addForm.vendor" /></label>
         <label><span>车牌号*</span><a-input v-model:value="addForm.vehiclePlate" /></label>
         <label><span>支出金额*</span><a-input-number v-model:value="addForm.amount" :min="0" style="width:100%" /></label>
-        <label class="wide"><span>内容*</span><a-input v-model:value="addForm.description" placeholder="维修事项描述，将自动归类" /></label>
-        <label><span>分类(可选)</span>
-          <a-select v-model:value="addForm.category" allow-clear style="width:100%" placeholder="留空自动归类">
-            <a-select-option v-for="c in categoryOptions" :key="c" :value="c">{{ catLabel(c) }}</a-select-option>
-          </a-select>
-        </label>
+        <label class="wide"><span>内容*</span><a-input v-model:value="addForm.description" placeholder="维修事项描述" /></label>
         <label><span>备注</span><a-input v-model:value="addForm.remark" /></label>
       </div>
     </a-modal>

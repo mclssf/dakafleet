@@ -165,6 +165,8 @@ export interface MaintenanceRecord {
   reviewStatus: 'pending' | 'approved';
   images: string[];
   createdAt: string;
+  // 付款明细同步记录：付款状态跟随付款明细，只读；其它来源用 paymentDate 手动标记
+  syncedPaid?: boolean;
 }
 
 export type TirePosition = 'FL' | 'FR' | 'RL' | 'RR' | 'SPARE' | null;
@@ -186,7 +188,7 @@ export interface TireRecord {
   receiptNo: string | null;
   images: string[];
   paymentDate: string | null;
-  paymentStatus: '已付' | '未付' | '财务已付款';
+  paymentStatus: '已付' | '未付';
   tireNumberPending: boolean;
   createdAt: string;
 }

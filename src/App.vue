@@ -14,6 +14,7 @@ import {
   EditOutlined,
   FileSearchOutlined,
   LeftOutlined,
+  LogoutOutlined,
   MessageOutlined,
   PlusOutlined,
   ProjectOutlined,
@@ -28,10 +29,11 @@ import {
   ZoomInOutlined,
   ZoomOutOutlined
 } from '@ant-design/icons-vue';
-import { message } from 'ant-design-vue';
+import { message, Modal } from 'ant-design-vue';
 import zhCN from 'ant-design-vue/es/locale/zh_CN';
 import AgentOpsPage from './AgentOpsPage.vue';
 import ChargingDetailPage from './ChargingDetailPage.vue';
+import LoginPage from './LoginPage.vue';
 import MaintenanceDetailPage from './MaintenanceDetailPage.vue';
 import TireExpensePage from './TireExpensePage.vue';
 import {
@@ -83,6 +85,16 @@ function hashForPage(page: PageKey) {
 }
 
 const activePage = ref<PageKey>(pageFromLocation());
+const isAuthed = ref(localStorage.getItem('dakafleet-auth') === '1');
+const currentUser = ref(localStorage.getItem('dakafleet-auth-user') || 'admin');
+function onLoginSuccess() {
+  currentUser.value = localStorage.getItem('dakafleet-auth-user') || 'admin';
+  isAuthed.value = true;
+}
+function logout() {
+  localStorage.removeItem('dakafleet-auth');
+  isAuthed.value = false;
+}
 const projectRows = ref<Project[]>(projects.map((project) => ({ ...project })));
 const selectedProjectId = ref(projectRows.value[0].id);
 const selectedVehicleId = ref(vehicles[0].id);
@@ -617,7 +629,7 @@ const weighPhotoBoxes: Record<WeighSource, Record<string, FieldBox>> = {
     tare: { key: 'tare', label: '皮重', x: 66, y: 40, w: 8, h: 4 },
     net: { key: 'net', label: '净重', x: 79, y: 40, w: 8, h: 4 },
     carrier: { key: 'carrier', label: '承运单位', x: 24, y: 46, w: 24, h: 5 },
-    vehiclePlate: { key: 'vehiclePlate', label: '车号', x: 55, y: 46, w: 13, h: 5 },
+    vehiclePlate: { key: 'vehiclePlate', label: '车牌号', x: 55, y: 46, w: 13, h: 5 },
     driver: { key: 'driver', label: '驾驶员', x: 72, y: 46, w: 14, h: 5 },
     remark: { key: 'remark', label: '备注', x: 24, y: 53, w: 20, h: 4 },
     maker: { key: 'maker', label: '制单人', x: 24, y: 61, w: 18, h: 4 },
@@ -632,7 +644,7 @@ const weighPhotoBoxes: Record<WeighSource, Record<string, FieldBox>> = {
     tare: { key: 'tare', label: '皮重', x: 70, y: 72, w: 8, h: 4 },
     net: { key: 'net', label: '净重', x: 83, y: 72, w: 10, h: 4 },
     carrier: { key: 'carrier', label: '承运单位', x: 14, y: 78, w: 32, h: 5 },
-    vehiclePlate: { key: 'vehiclePlate', label: '车号', x: 57, y: 78, w: 13, h: 5 },
+    vehiclePlate: { key: 'vehiclePlate', label: '车牌号', x: 57, y: 78, w: 13, h: 5 },
     driver: { key: 'driver', label: '驾驶员', x: 73, y: 78, w: 15, h: 5 },
     remark: { key: 'remark', label: '备注', x: 14, y: 85, w: 26, h: 4 },
     maker: { key: 'maker', label: '制单人', x: 13, y: 90, w: 18, h: 4 },
@@ -1022,7 +1034,7 @@ const weighColumns = [
 
 const expenseColumns = [
   { title: '发生日期', dataIndex: 'occurredDate', width: 112 },
-  { title: '车号', dataIndex: 'vehiclePlate', width: 116 },
+  { title: '车牌号', dataIndex: 'vehiclePlate', width: 116 },
   { title: '司机', dataIndex: 'driver', width: 82 },
   { title: '费用类型', dataIndex: 'type', width: 96 },
   { title: '事项', dataIndex: 'item' },
@@ -1041,7 +1053,6 @@ const vehicleColumns = [
   { title: '收入', dataIndex: 'revenue', width: 100 },
   { title: '成本', dataIndex: 'cost', width: 100 },
   { title: '利润', dataIndex: 'profit', width: 100 },
-  { title: '异常', dataIndex: 'issues', width: 76 },
   { title: '操作', dataIndex: 'action', width: 88 }
 ];
 
@@ -1076,7 +1087,7 @@ const weighFieldGroups = computed<WeighReviewGroup[]>(() => {
     {
       title: '公共信息',
       fields: [
-        reviewField('vehiclePlate', '车号', pair.vehiclePlate, 'both', 'vehiclePlate'),
+        reviewField('vehiclePlate', '车牌号', pair.vehiclePlate, 'both', 'vehiclePlate'),
         reviewField('driver', '驾驶员', pair.driver, 'both', 'driver'),
         reviewField('goods', '货物名称', pair.goods, 'both', 'goods'),
         reviewField('mineType', '矿别', departure.mineType, 'both', 'mineType'),
@@ -1119,7 +1130,7 @@ const expenseFields = computed(() => {
   const item = currentExpense.value;
   return [
     field('driver', '司机', item.driver),
-    field('vehiclePlate', '车号', item.vehiclePlate),
+    field('vehiclePlate', '车牌号', item.vehiclePlate),
     field('type', '报销类型', item.type),
     field('item', '报销事项', item.item),
     field('amount', '金额', item.amount),
@@ -1663,10 +1674,38 @@ function markWeigh(status: AuditStatus) {
   if (status === '已通过') nextWeigh();
 }
 
+// 驳回磅单：确认后作废
+function confirmRejectWeigh() {
+  Modal.confirm({
+    title: '确认驳回此磅单？',
+    content: '驳回后该磅单将作废，不可恢复。',
+    okText: '确认驳回',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk() {
+      markWeigh('已驳回');
+    }
+  });
+}
+
 function markExpense(status: AuditStatus) {
   currentExpense.value.auditStatus = status;
   message.success(`报销 ${currentExpense.value.id} 已标记为${status}`);
   if (status === '已通过') nextExpense();
+}
+
+// 驳回报销单：确认后作废
+function confirmRejectExpense() {
+  Modal.confirm({
+    title: '确认驳回此报销单？',
+    content: '驳回后该报销单将作废，不可恢复。',
+    okText: '确认驳回',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk() {
+      markExpense('已驳回');
+    }
+  });
 }
 
 function saveWeigh() {
@@ -1965,7 +2004,9 @@ onBeforeUnmount(() => {
       }
     }"
   >
-    <AgentOpsPage v-if="activePage === 'agentOps'" />
+    <LoginPage v-if="!isAuthed" @success="onLoginSuccess" />
+
+    <AgentOpsPage v-else-if="activePage === 'agentOps'" />
 
     <div
       v-else
@@ -2029,7 +2070,6 @@ onBeforeUnmount(() => {
                 <a-badge v-if="projectPendingTotal(project.id) > 0" :count="projectPendingTotal(project.id)" :number-style="{ backgroundColor: '#F77113' }" />
               </div>
               <div class="project-card-metrics">
-                <span>{{ projectVehicleCount(project.id) }} 车</span>
                 <span :class="{ danger: projectProfitValue(project.id) < 0 }">{{ money(projectProfitValue(project.id)) }}</span>
               </div>
               <div class="project-card-foot">
@@ -2061,6 +2101,15 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </div>
+
+        <button class="user-card" @click="logout" title="点击退出登录">
+          <span class="user-avatar">{{ currentUser.slice(0, 1).toUpperCase() }}</span>
+          <span class="user-meta">
+            <strong>{{ currentUser }}</strong>
+            <em>登录人</em>
+          </span>
+          <LogoutOutlined class="user-logout-icon" />
+        </button>
       </aside>
 
       <main class="main-panel">
@@ -2167,7 +2216,7 @@ onBeforeUnmount(() => {
             <a-button @click="previousWeigh"><LeftOutlined />上一张</a-button>
             <a-button @click="nextWeigh">下一张<RightOutlined /></a-button>
             <a-button @click="saveWeigh">保存修改</a-button>
-            <a-button danger @click="markWeigh('已驳回')"><CloseOutlined />驳回</a-button>
+            <a-button danger @click="confirmRejectWeigh"><CloseOutlined />驳回</a-button>
             <a-button @click="markWeigh('有疑点')"><WarningOutlined />标记疑点</a-button>
             <a-button type="primary" @click="markWeigh('已通过')"><CheckOutlined />通过并下一张</a-button>
           </div>
@@ -2206,7 +2255,7 @@ onBeforeUnmount(() => {
               <a-select-option value="全部线路">全部线路</a-select-option>
               <a-select-option v-for="route in weighRouteOptions" :key="route.value" :value="route.value">{{ route.label }}（{{ route.count }}）</a-select-option>
             </a-select>
-            <a-input v-model:value="weighKeyword" placeholder="搜索车号、司机、货物、客户、地点、单号" allow-clear>
+            <a-input v-model:value="weighKeyword" placeholder="搜索车牌号、司机、货物、客户、地点、单号" allow-clear>
               <template #prefix><SearchOutlined /></template>
             </a-input>
             <a-button><DownloadOutlined />导出磅单汇总表</a-button>
@@ -2296,12 +2345,6 @@ onBeforeUnmount(() => {
                   <span class="field-issue">{{ currentExpense.anomalies.find((issue) => issue.includes(item.label.slice(0, 2))) || '-' }}</span>
                 </div>
               </div>
-              <div class="shortcut-row">
-                <a-button size="small" @click="updateExpenseValue('type', '油费')">改为油费</a-button>
-                <a-button size="small" @click="updateExpenseValue('type', '过路费')">改为过路费</a-button>
-                <a-button size="small" @click="currentExpense.anomalies.push('重复报销')">标记重复</a-button>
-                <a-button size="small" @click="currentExpense.item = `${currentExpense.item}（合并同类费用）`">合并同类费用</a-button>
-              </div>
             </div>
           </div>
 
@@ -2309,7 +2352,7 @@ onBeforeUnmount(() => {
             <a-button @click="previousExpense"><LeftOutlined />上一笔</a-button>
             <a-button @click="nextExpense">下一笔<RightOutlined /></a-button>
             <a-button @click="saveExpense">保存修改</a-button>
-            <a-button danger @click="markExpense('已驳回')"><CloseOutlined />驳回</a-button>
+            <a-button danger @click="confirmRejectExpense"><CloseOutlined />驳回</a-button>
             <a-button @click="markExpense('有疑点')"><WarningOutlined />标记疑点</a-button>
             <a-button type="primary" @click="markExpense('已通过')"><CheckOutlined />通过并下一笔</a-button>
           </div>
