@@ -414,7 +414,7 @@ button {
 
 .quick-grid {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   width: 100%;
   max-width: 800px;
@@ -422,7 +422,10 @@ button {
   margin: 0 auto 12px;
   padding: 6px 12px;
   gap: 8px;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
   border: 1px solid #deded9;
   border-radius: 18px;
   background: #ffffff;
@@ -431,20 +434,31 @@ button {
     0 2px 8px rgba(15, 23, 42, 0.04);
   pointer-events: auto;
 }
+.quick-grid::-webkit-scrollbar {
+  height: 6px;
+}
+.quick-grid::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.28);
+}
 
 .quick-label {
+  position: sticky;
+  left: 0;
   flex: 0 0 auto;
+  padding-right: 4px;
   color: #64748b;
   font-size: 12px;
   font-weight: 500;
   line-height: 18px;
+  background: #ffffff;
+  z-index: 1;
 }
 
 .quick-grid button {
-  flex: 0 1 auto;
-  min-width: 128px;
+  flex: 0 0 auto;
   height: 28px;
-  padding: 0 12px;
+  padding: 0 14px;
   overflow: visible;
   border: 1px solid #e6e6e2;
   border-radius: 999px;
@@ -1383,6 +1397,31 @@ button.mini-result {
 
 .base-values-modal .base-route-label {
   grid-column: 1 / -1;
+}
+
+.weigh-edit-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+}
+.weigh-edit-form label {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.weigh-edit-form label > span {
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+}
+.weigh-edit-form label.weigh-edit-wide {
+  grid-column: 1 / -1;
+}
+.weigh-edit-tip {
+  margin: 14px 0 0;
+  color: #6b5f70;
+  font-size: 12px;
 }
 
 .route-option {

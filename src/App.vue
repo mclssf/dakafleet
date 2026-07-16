@@ -114,6 +114,20 @@ const expenseZoom = ref(1);
 const expenseRotation = ref(0);
 const expenseImageIndex = ref(0);
 const weighKeyword = ref('');
+const weighEditId = ref('');
+const weighEditForm = reactive<Record<string, any>>({
+  loadingDate: '',
+  unloadingDate: '',
+  orderNo: '',
+  customer: '',
+  vehiclePlate: '',
+  driver: '',
+  goods: '',
+  loadingPlace: '',
+  loadingTonnage: 0,
+  unloadingPlace: '',
+  unloadingTonnage: 0
+});
 const weighRouteFilter = ref('全部线路');
 const weighDateRange = ref<string[]>([]);
 const expenseStatusFilter = ref<string>('全部');
@@ -230,6 +244,7 @@ const companyNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
 ];
 
 const projectNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
+  { key: 'agent', label: '智能体工作台', icon: MessageOutlined },
   { key: 'weighList', label: '磅单列表', icon: TableOutlined },
   { key: 'expenseList', label: '付款明细', icon: WalletOutlined },
   { key: 'chargingDetail', label: '充电明细', icon: ThunderboltOutlined },
@@ -861,8 +876,27 @@ const pairedWeighRows = computed<PairedWeighRecord[]>(() => {
     })
     .filter((item): item is PairedWeighRecord => Boolean(item));
 
-  return [...imageDerivedRows, ...buildBulkPairedWeighRows()];
+  return applyWeighEdits([...imageDerivedRows, ...buildBulkPairedWeighRows()]);
 });
+
+// 磅单列表行编辑覆盖表（键为记录 id），应用后重算派生字段
+type WeighEditable = Pick<
+  PairedWeighRecord,
+  'loadingDate' | 'unloadingDate' | 'orderNo' | 'customer' | 'vehiclePlate' | 'driver' | 'goods' | 'loadingPlace' | 'loadingTonnage' | 'unloadingPlace' | 'unloadingTonnage'
+>;
+const weighEdits = ref<Record<string, Partial<WeighEditable>>>({});
+
+function applyWeighEdits(rows: PairedWeighRecord[]): PairedWeighRecord[] {
+  return rows.map((row) => {
+    const edit = weighEdits.value[row.id];
+    if (!edit) return row;
+    const merged = { ...row, ...edit };
+    const taxableOutput = merged.unloadingTonnage * merged.taxableUnitPrice;
+    const taxPoint = taxableOutput * merged.taxRate;
+    const profit = taxableOutput - merged.cargoInsurance - merged.driverSalary - taxPoint;
+    return { ...merged, taxableOutput, taxPoint, profit, receivedFreight: taxableOutput };
+  });
+}
 
 const auditWeighPairs = computed<WeighAuditPair[]>(() => {
   const rows = weighRows.value.filter((item) => item.type !== '未识别');
@@ -1042,7 +1076,7 @@ const expenseColumns = [
   { title: '付款对象', dataIndex: 'payee', width: 180 },
   { title: '支付状态', dataIndex: 'payStatus', width: 100 },
   { title: '提报时间', dataIndex: 'submittedAt', width: 148 },
-  { title: '操作', dataIndex: 'action', fixed: 'right', width: 108 }
+  { title: '操作', dataIndex: 'action', fixed: 'right', width: 150 }
 ];
 
 const vehicleColumns = [
@@ -1092,7 +1126,8 @@ const weighFieldGroups = computed<WeighReviewGroup[]>(() => {
         reviewField('goods', '货物名称', pair.goods, 'both', 'goods'),
         reviewField('mineType', '矿别', departure.mineType, 'both', 'mineType'),
         reviewField('carrier', '承运单位', departure.carrier, 'both', 'carrier'),
-        reviewField('route', '线路', pair.route, 'none')
+        reviewField('route', '线路', pair.route, 'none'),
+        reviewField('remark', '备注', departure.remark, 'both', 'remark')
       ]
     },
     {
@@ -1511,6 +1546,46 @@ function openPairedWeigh(record: PairedWeighRecord) {
   goWeighAudit(sourceBill);
 }
 
+function openWeighEdit(record: PairedWeighRecord) {
+  weighEditId.value = record.id;
+  weighEditForm.loadingDate = record.loadingDate;
+  weighEditForm.unloadingDate = record.unloadingDate;
+  weighEditForm.orderNo = record.orderNo;
+  weighEditForm.customer = record.customer;
+  weighEditForm.vehiclePlate = record.vehiclePlate;
+  weighEditForm.driver = record.driver;
+  weighEditForm.goods = record.goods;
+  weighEditForm.loadingPlace = record.loadingPlace;
+  weighEditForm.loadingTonnage = record.loadingTonnage;
+  weighEditForm.unloadingPlace = record.unloadingPlace;
+  weighEditForm.unloadingTonnage = record.unloadingTonnage;
+}
+
+function cancelWeighEdit() {
+  weighEditId.value = '';
+}
+
+function saveWeighEdit() {
+  weighEdits.value = {
+    ...weighEdits.value,
+    [weighEditId.value]: {
+      loadingDate: weighEditForm.loadingDate,
+      unloadingDate: weighEditForm.unloadingDate,
+      orderNo: weighEditForm.orderNo,
+      customer: weighEditForm.customer,
+      vehiclePlate: weighEditForm.vehiclePlate,
+      driver: weighEditForm.driver,
+      goods: weighEditForm.goods,
+      loadingPlace: weighEditForm.loadingPlace,
+      loadingTonnage: Number(weighEditForm.loadingTonnage) || 0,
+      unloadingPlace: weighEditForm.unloadingPlace,
+      unloadingTonnage: Number(weighEditForm.unloadingTonnage) || 0
+    }
+  };
+  weighEditId.value = '';
+  message.success('磅单已保存，含税产值与利润已重算');
+}
+
 function goExpenseAudit(record?: Expense) {
   if (record) {
     reviewExpenseIndex.value = Math.max(0, expenseRows.value.findIndex((item) => item.id === record.id));
@@ -1532,7 +1607,7 @@ function updateWeighValue(key: string, value: string) {
   const targets =
     sourceKey === 'departure' || sourceKey === 'arrival'
       ? [pair[sourceKey] as WeighBill]
-      : ['vehiclePlate', 'driver', 'goods', 'mineType', 'carrier'].includes(rawKey)
+      : ['vehiclePlate', 'driver', 'goods', 'mineType', 'carrier', 'remark'].includes(rawKey)
         ? [pair.departure, pair.arrival]
         : [];
 
@@ -1674,12 +1749,12 @@ function markWeigh(status: AuditStatus) {
   if (status === '已通过') nextWeigh();
 }
 
-// 驳回磅单：确认后作废
+// 作废磅单：确认后作废
 function confirmRejectWeigh() {
   Modal.confirm({
-    title: '确认驳回此磅单？',
-    content: '驳回后该磅单将作废，不可恢复。',
-    okText: '确认驳回',
+    title: '确认作废此磅单？',
+    content: '作废后该磅单不可恢复。',
+    okText: '确认作废',
     okType: 'danger',
     cancelText: '取消',
     onOk() {
@@ -1694,12 +1769,12 @@ function markExpense(status: AuditStatus) {
   if (status === '已通过') nextExpense();
 }
 
-// 驳回报销单：确认后作废
+// 作废报销单：确认后作废
 function confirmRejectExpense() {
   Modal.confirm({
-    title: '确认驳回此报销单？',
-    content: '驳回后该报销单将作废，不可恢复。',
-    okText: '确认驳回',
+    title: '确认作废此报销单？',
+    content: '作废后该报销单不可恢复。',
+    okText: '确认作废',
     okType: 'danger',
     cancelText: '取消',
     onOk() {
@@ -1717,6 +1792,51 @@ function saveWeigh() {
 function markExpensePaid(record: Expense) {
   record.payStatus = '已付款';
   message.success(`${record.driver} ${record.type} ${money(record.amount)} 已标记为已付`);
+}
+
+// 付款明细行内编辑
+const expenseEditId = ref('');
+const expenseEditRef = ref<Expense | null>(null);
+const expenseEditForm = reactive<Record<string, any>>({
+  occurredDate: '',
+  vehiclePlate: '',
+  driver: '',
+  type: '',
+  item: '',
+  amount: 0,
+  payee: '',
+  payStatus: '未付款' as Expense['payStatus']
+});
+function openExpenseEdit(record: Expense) {
+  expenseEditId.value = record.id;
+  expenseEditRef.value = record;
+  expenseEditForm.occurredDate = record.occurredDate;
+  expenseEditForm.vehiclePlate = record.vehiclePlate;
+  expenseEditForm.driver = record.driver;
+  expenseEditForm.type = record.type;
+  expenseEditForm.item = record.item;
+  expenseEditForm.amount = record.amount;
+  expenseEditForm.payee = record.payee;
+  expenseEditForm.payStatus = record.payStatus;
+}
+function cancelExpenseEdit() {
+  expenseEditId.value = '';
+  expenseEditRef.value = null;
+}
+function saveExpenseEdit() {
+  const record = expenseEditRef.value;
+  if (!record) return;
+  record.occurredDate = expenseEditForm.occurredDate;
+  record.vehiclePlate = expenseEditForm.vehiclePlate;
+  record.driver = expenseEditForm.driver;
+  record.type = expenseEditForm.type;
+  record.item = expenseEditForm.item;
+  record.amount = Number(expenseEditForm.amount) || 0;
+  record.payee = expenseEditForm.payee;
+  record.payStatus = expenseEditForm.payStatus;
+  expenseEditId.value = '';
+  expenseEditRef.value = null;
+  message.success('付款明细已保存');
 }
 
 function saveExpense() {
@@ -1822,6 +1942,115 @@ function agentProcess(intent: string, taskSteps: string[]) {
 
 function buildAgentReply(content: string, options?: { deferNavigation?: boolean }): AgentMessage {
   const shouldNavigate = !options?.deferNavigation;
+
+  // 5. 路由归集
+  if (content.includes('砚山') && content.includes('富宁')) {
+    return {
+      role: 'agent',
+      content: '6 月砚山→富宁共 23 趟，累计净重 745.6 吨，毛利 ¥128,420。',
+      ...agentProcess('识别为按线路的运量归集诉求，需要限定线路和时间范围后聚合磅单。', [
+        '匹配线路：砚山 → 富宁，时间范围：6 月',
+        '聚合已配对磅单的趟数与卸货净重',
+        '结合线路含税单价测算毛利'
+      ]),
+      skills: ['线路运量归集', '毛利测算'],
+      resultCards: [
+        { label: '趟数', value: '23 趟', tone: 'blue' },
+        { label: '累计净重', value: '745.6 吨', tone: 'blue' },
+        { label: '毛利', value: '¥128,420', tone: 'green' }
+      ]
+    };
+  }
+
+  // 6. 复核操作
+  if (content.includes('M202607130227')) {
+    return {
+      role: 'agent',
+      content: '已标记 M202607130227（粤B79120D）为「有疑点」，备注：装卸净重差异 1.2 吨。是否需要查看原图复核？',
+      ...agentProcess('识别为对指定磅单的复核标记操作，需要定位单据并写入疑点状态与备注。', [
+        '定位磅单 M202607130227（车牌 粤B79120D）',
+        '将审核状态置为「有疑点」，写入净重差异备注',
+        '提示财务是否进入原图复核'
+      ]),
+      skills: ['磅单状态标记', '异常备注'],
+      resultCards: [
+        { label: '单据', value: 'M202607130227', tone: 'orange' },
+        { label: '状态', value: '有疑点', tone: 'red', action: 'weighAudit' }
+      ]
+    };
+  }
+
+  // 7. 数据导出
+  if ((content.includes('导出') && content.includes('磅单')) || (content.includes('导出') && content.includes('汇总表'))) {
+    return {
+      role: 'agent',
+      content: '6 月磅单汇总表已生成（45 笔配对，3 笔缺失），文件链接：daka-fleet/export/202606-weighbill.xlsx。',
+      ...agentProcess('识别为磅单汇总导出诉求，需要按月汇总配对结果并生成 Excel。', [
+        '限定时间范围：6 月，读取已配对磅单',
+        '标记缺失到货单的记录，生成导出预览',
+        '输出 Excel 文件链接'
+      ]),
+      skills: ['Excel字段映射', '汇总导出'],
+      resultCards: [
+        { label: '配对', value: '45 笔', tone: 'blue' },
+        { label: '缺失', value: '3 笔', tone: 'orange' },
+        { label: '导出文件', value: '202606-weighbill.xlsx', tone: 'green' }
+      ]
+    };
+  }
+
+  // 8. 异常预警
+  if (content.includes('净重差异') && content.includes('哪些')) {
+    return {
+      role: 'agent',
+      content: '5 笔净重差异涉及 3 辆车：粤B79120D（2 笔）、粤B98746D（2 笔）、粤J02360D（1 笔）。建议对前两辆车的承运单位（广西信发物流）做一次抽检。',
+      ...agentProcess('识别为异常归因诉求，需要按车辆聚合净重差异并给出风险处置建议。', [
+        '筛选净重差异异常记录，按车辆归集笔数',
+        '定位高频异常车辆与其承运单位',
+        '输出抽检建议'
+      ]),
+      skills: ['异常归因', '承运商风险识别'],
+      resultCards: [
+        { label: '异常车辆', value: '3 辆 / 5 笔', tone: 'red' },
+        { label: '重点承运商', value: '广西信发物流', tone: 'orange' }
+      ]
+    };
+  }
+
+  // 9. 业务线分析
+  if ((content.includes('煤炭') && content.includes('铝')) || content.includes('哪个项目利润')) {
+    if (shouldNavigate) activePage.value = 'projects';
+    return {
+      role: 'agent',
+      content: '近 30 天，云南煤炭碳硫铝 ¥160,707（毛利），信发碳硫铝 ¥144,975，广西华银氧化铝 ¥164,281。广西华银氧化铝最高，但云南煤炭碳硫铝单吨毛利最优（¥58/吨）。',
+      ...agentProcess('识别为跨业务线的利润对比诉求，需要按项目聚合近 30 天毛利并比较单吨毛利。', [
+        '聚合近 30 天各项目产值与成本',
+        '计算项目毛利与单吨毛利',
+        '输出对比结论与最优项目'
+      ]),
+      skills: ['项目利润对比', '单吨毛利分析'],
+      resultCards: [
+        { label: '广西华银氧化铝', value: '¥164,281', tone: 'green' },
+        { label: '云南煤炭碳硫铝', value: '¥160,707 · ¥58/吨', tone: 'blue' },
+        { label: '信发碳硫铝', value: '¥144,975', tone: 'blue' }
+      ]
+    };
+  }
+
+  // 10. 操作指导
+  if (content.includes('驳回') && (content.includes('恢复') || content.includes('还能'))) {
+    return {
+      role: 'agent',
+      content: '可以。在「磅单列表 → 筛选状态：已驳回」找到对应单据，点击「恢复」即可重新进入待审核队列。但若已超过 7 天，卸货单已超期，需重新上传原始图片。',
+      ...agentProcess('识别为操作指导诉求，需要说明已驳回单据的恢复路径与限制条件。', [
+        '说明恢复入口：磅单列表按已驳回状态筛选',
+        '给出恢复操作步骤',
+        '提示 7 天超期需重新上传原图的限制'
+      ]),
+      skills: ['操作指引', '单据状态流转']
+    };
+  }
+
   if (content.includes('今日') && content.includes('待审核') && content.includes('磅单')) {
     if (shouldNavigate) activePage.value = 'weighAudit';
     const pending = auditWeighPairs.value.filter((item) => item.projectId === selectedProjectId.value && item.status === '待审核');
@@ -2129,7 +2358,107 @@ onBeforeUnmount(() => {
           </div>
         </header>
 
-        <section v-if="activePage === 'weighAudit'" class="content review-screen">
+        <section v-if="activePage === 'agent'" class="content agent-layout">
+          <div class="chat-panel">
+            <div ref="chatStreamRef" class="chat-stream">
+              <div v-for="(msg, index) in agentMessages" :key="index" class="chat-message" :class="msg.role">
+                <div class="avatar">{{ msg.role === 'agent' ? 'AI' : '我' }}</div>
+                <div class="bubble">
+                  <p>{{ msg.content }}</p>
+                  <div v-if="msg.streaming" class="agent-typing">
+                    <i></i><i></i><i></i>
+                    <span>生成中</span>
+                  </div>
+                  <div v-if="msg.intent || msg.taskSteps?.length" class="agent-process">
+                    <div v-if="msg.intent" class="process-block">
+                      <span>意图理解</span>
+                      <strong>{{ msg.intent }}</strong>
+                    </div>
+                    <div v-if="msg.taskSteps?.length" class="process-block">
+                      <span>任务拆解</span>
+                      <ol>
+                        <li v-for="step in msg.taskSteps" :key="step">{{ step }}</li>
+                      </ol>
+                    </div>
+                  </div>
+                  <div v-if="msg.skills?.length" class="skill-row">
+                    <a-tag v-for="skill in msg.skills" :key="skill" color="blue">{{ skill }}</a-tag>
+                  </div>
+                  <div v-if="msg.resultCards?.length" class="result-row">
+                    <button
+                      v-for="card in msg.resultCards"
+                      :key="card.label"
+                      class="mini-result"
+                      :class="[card.tone, { clickable: resultCardTarget(card) }]"
+                      type="button"
+                      @click="handleResultCardClick(card)"
+                    >
+                      <span>{{ card.label }}</span>
+                      <strong>{{ card.value }}</strong>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="chat-input">
+              <div class="quick-grid">
+                <span class="quick-label">推荐指令</span>
+                <button v-for="prompt in quickPrompts" :key="prompt" @click="sendAgent(prompt)">{{ prompt }}</button>
+              </div>
+              <div class="agent-composer">
+                <a-textarea
+                  v-model:value="agentInput"
+                  :bordered="false"
+                  :auto-size="{ minRows: 2, maxRows: 4 }"
+                  placeholder="发消息..."
+                  @keydown.enter.exact.prevent="sendAgent()"
+                />
+                <div class="composer-toolbar">
+                  <div ref="modelSelectRef" class="model-select">
+                    <button
+                      type="button"
+                      role="combobox"
+                      aria-haspopup="listbox"
+                      :aria-expanded="isModelSelectOpen"
+                      class="model-select-trigger"
+                      @click.stop="isModelSelectOpen = !isModelSelectOpen"
+                    >
+                      <span class="model-glyph" :class="selectedAgentModel.tone">{{ selectedAgentModel.short }}</span>
+                      <span class="model-label">{{ selectedAgentModel.label }}</span>
+                      <DownOutlined />
+                    </button>
+                    <div v-if="isModelSelectOpen" class="model-menu" role="listbox">
+                      <div class="model-menu-title">内置模型</div>
+                      <button
+                        v-for="option in agentModelOptions"
+                        :key="option.value"
+                        type="button"
+                        role="option"
+                        :aria-selected="selectedAgentModel.value === option.value"
+                        class="model-option"
+                        :class="{ active: selectedAgentModel.value === option.value }"
+                        @click="selectAgentModel(option)"
+                      >
+                        <span class="model-glyph" :class="option.tone">{{ option.short }}</span>
+                        <span>
+                          <strong>{{ option.label }}</strong>
+                          <em>{{ option.hint }}</em>
+                        </span>
+                        <CheckOutlined v-if="selectedAgentModel.value === option.value" />
+                      </button>
+                    </div>
+                  </div>
+                  <span class="composer-hint">Enter 发送，Shift Enter 换行</span>
+                  <a-button type="primary" shape="circle" @click="sendAgent()">
+                    <template #icon><MessageOutlined /></template>
+                  </a-button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section v-else-if="activePage === 'weighAudit'" class="content review-screen">
           <div class="review-back-bar">
             <a-button @click="navigate('weighList')"><LeftOutlined />返回磅单列表</a-button>
           </div>
@@ -2216,7 +2545,7 @@ onBeforeUnmount(() => {
             <a-button @click="previousWeigh"><LeftOutlined />上一张</a-button>
             <a-button @click="nextWeigh">下一张<RightOutlined /></a-button>
             <a-button @click="saveWeigh">保存修改</a-button>
-            <a-button danger @click="confirmRejectWeigh"><CloseOutlined />驳回</a-button>
+            <a-button danger @click="confirmRejectWeigh"><CloseOutlined />作废</a-button>
             <a-button @click="markWeigh('有疑点')"><WarningOutlined />标记疑点</a-button>
             <a-button type="primary" @click="markWeigh('已通过')"><CheckOutlined />通过并下一张</a-button>
           </div>
@@ -2275,7 +2604,9 @@ onBeforeUnmount(() => {
               <template v-else-if="column.dataIndex === 'taxableOutput' || column.dataIndex === 'taxPoint' || column.dataIndex === 'profit'">
                 <span :class="{ danger: column.dataIndex === 'profit' && record.profit < 0 }">{{ money(record[column.dataIndex]) }}</span>
               </template>
-              <template v-else-if="column.dataIndex === 'action'"><a-button size="small" @click="openPairedWeigh(record)">原图</a-button></template>
+              <template v-else-if="column.dataIndex === 'action'">
+                <a-button size="small" @click="openPairedWeigh(record)">原图</a-button>
+              </template>
             </template>
           </a-table>
         </section>
@@ -2352,7 +2683,7 @@ onBeforeUnmount(() => {
             <a-button @click="previousExpense"><LeftOutlined />上一笔</a-button>
             <a-button @click="nextExpense">下一笔<RightOutlined /></a-button>
             <a-button @click="saveExpense">保存修改</a-button>
-            <a-button danger @click="confirmRejectExpense"><CloseOutlined />驳回</a-button>
+            <a-button danger @click="confirmRejectExpense"><CloseOutlined />作废</a-button>
             <a-button @click="markExpense('有疑点')"><WarningOutlined />标记疑点</a-button>
             <a-button type="primary" @click="markExpense('已通过')"><CheckOutlined />通过并下一笔</a-button>
           </div>
@@ -2399,12 +2730,31 @@ onBeforeUnmount(() => {
           >
             <template #emptyText><a-empty description="暂无付款明细数据" /></template>
             <template #bodyCell="{ column, record }">
-              <template v-if="column.dataIndex === 'amount'">{{ money(record.amount) }}</template>
+              <template v-if="expenseEditId === record.id && ['occurredDate','vehiclePlate','driver','type','item','payee'].includes(column.dataIndex)">
+                <a-input v-model:value="expenseEditForm[column.dataIndex]" size="small" />
+              </template>
+              <template v-else-if="expenseEditId === record.id && column.dataIndex === 'amount'">
+                <a-input-number v-model:value="expenseEditForm.amount" size="small" :min="0" :precision="2" style="width: 88px" />
+              </template>
+              <template v-else-if="expenseEditId === record.id && column.dataIndex === 'payStatus'">
+                <a-select v-model:value="expenseEditForm.payStatus" size="small" style="width: 92px">
+                  <a-select-option value="未付款">未付款</a-select-option>
+                  <a-select-option value="已付款">已付款</a-select-option>
+                </a-select>
+              </template>
+              <template v-else-if="column.dataIndex === 'amount'">{{ money(record.amount) }}</template>
               <template v-else-if="column.dataIndex === 'payStatus'"><a-tag :color="statusColor(record.payStatus)">{{ record.payStatus }}</a-tag></template>
               <template v-else-if="column.dataIndex === 'action'">
-                <a-button size="small" type="primary" ghost :disabled="record.payStatus === '已付款'" @click="markExpensePaid(record)">
-                  标记已付
-                </a-button>
+                <template v-if="expenseEditId === record.id">
+                  <a-button size="small" type="primary" @click="saveExpenseEdit">保存</a-button>
+                  <a-button size="small" @click="cancelExpenseEdit">取消</a-button>
+                </template>
+                <template v-else>
+                  <a-button size="small" @click="openExpenseEdit(record)"><template #icon><EditOutlined /></template></a-button>
+                  <a-button size="small" type="primary" ghost :disabled="record.payStatus === '已付款'" @click="markExpensePaid(record)">
+                    标记已付
+                  </a-button>
+                </template>
               </template>
             </template>
           </a-table>

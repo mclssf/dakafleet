@@ -35,6 +35,7 @@ interface DataEmployee {
   id: string;
   kind: EmployeeKind;
   enterpriseId?: string;
+  enterpriseCid?: string;
   projectId?: string;
   name: string;
   description: string;
@@ -86,6 +87,7 @@ const validationForm = reactive({
 const employeeForm = reactive({
   description: '',
   enterpriseId: '',
+  enterpriseCid: '',
   groupSearch: '',
   groupIds: [] as string[],
   kind: '微信群' as EmployeeKind,
@@ -442,12 +444,20 @@ function defaultSkillForKind(kind: EmployeeKind) {
 - 状态 -> order_status`;
 }
 
+// 根据企业生成默认 CID（Demo：企业 id 派生，可手动覆盖）
+function defaultEnterpriseCid(enterpriseId: string) {
+  if (!enterpriseId) return '';
+  const idx = tenantEnterprises.findIndex((e) => e.id === enterpriseId);
+  return `CID-${String(idx + 1).padStart(4, '0')}`;
+}
+
 function resetEmployeeForm(kind: EmployeeKind = 'TMS') {
   editingEmployeeId.value = '';
   employeeForm.kind = kind;
   employeeForm.name = '';
   employeeForm.description = '';
   employeeForm.enterpriseId = kind === '微信群' ? tenantEnterprises[0]?.id ?? '' : '';
+  employeeForm.enterpriseCid = kind === '微信群' ? defaultEnterpriseCid(employeeForm.enterpriseId) : '';
   employeeForm.projectId = kind === '微信群' ? tenantProjects.find((project) => project.enterpriseId === employeeForm.enterpriseId)?.id ?? '' : '';
   employeeForm.loginUrl = '';
   employeeForm.loginType = '无验证';
@@ -469,6 +479,7 @@ function openEditEmployeeModal(employee: DataEmployee) {
   employeeForm.name = employee.name;
   employeeForm.description = employee.description;
   employeeForm.enterpriseId = employee.enterpriseId ?? '';
+  employeeForm.enterpriseCid = employee.enterpriseCid ?? defaultEnterpriseCid(employee.enterpriseId ?? '');
   employeeForm.projectId = employee.projectId ?? '';
   employeeForm.loginUrl = employee.loginUrl ?? '';
   employeeForm.loginType = employee.loginType ?? '无验证';
@@ -494,6 +505,7 @@ function toggleFormGroup(groupId: string) {
 }
 
 function handleFormEnterpriseChange() {
+  employeeForm.enterpriseCid = defaultEnterpriseCid(employeeForm.enterpriseId);
   employeeForm.projectId = tenantProjects.find((project) => project.enterpriseId === employeeForm.enterpriseId)?.id ?? '';
   employeeForm.groupIds = [];
   employeeForm.groupSearch = '';
@@ -590,6 +602,7 @@ function confirmEmployee() {
             ...employee,
             description,
             enterpriseId: employeeForm.kind === '微信群' ? employeeForm.enterpriseId : undefined,
+            enterpriseCid: employeeForm.kind === '微信群' ? employeeForm.enterpriseCid.trim() : undefined,
             groupIds: employeeForm.kind === '微信群' ? [...employeeForm.groupIds] : undefined,
             loginType: employeeForm.kind === 'TMS' ? employeeForm.loginType : undefined,
             loginUrl: employeeForm.kind === 'TMS' ? employeeForm.loginUrl.trim() : undefined,
@@ -614,6 +627,7 @@ function confirmEmployee() {
     name,
     description,
     enterpriseId: employeeForm.kind === '微信群' ? employeeForm.enterpriseId : undefined,
+    enterpriseCid: employeeForm.kind === '微信群' ? employeeForm.enterpriseCid.trim() : undefined,
     groupIds: employeeForm.kind === '微信群' ? [...employeeForm.groupIds] : undefined,
     loginType: employeeForm.kind === 'TMS' ? employeeForm.loginType : undefined,
     loginUrl: employeeForm.kind === 'TMS' ? employeeForm.loginUrl.trim() : undefined,
@@ -1034,6 +1048,11 @@ function validateEmployee() {
                 {{ enterprise.name }}
               </a-select-option>
             </a-select>
+          </label>
+
+          <label>
+            <span>企业 CID</span>
+            <a-input v-model:value="employeeForm.enterpriseCid" placeholder="请输入企业 CID" />
           </label>
 
           <label>

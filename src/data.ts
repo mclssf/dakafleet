@@ -993,8 +993,12 @@ export const reimbursements: Expense[] = [
 export const quickPrompts = [
   '查看今日待审核磅单',
   '汇总本月每辆车利润',
-  '检查赣J03528是否有缺失磅单',
-  '查看司机罗明本月报销'
+  '6 月砚山到富宁这条线路共运了多少吨？',
+  '把 M202607130227 这张标记为有疑点',
+  '把 6 月的磅单汇总表导出来',
+  '5 笔净重差异都来自哪些车？',
+  '煤炭和铝业哪个项目利润更高？',
+  '驳回一张磅单后还能恢复吗？'
 ];
 
 export const initialAgentMessages: AgentMessage[] = [
