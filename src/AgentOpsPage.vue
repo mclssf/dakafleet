@@ -1,21 +1,87 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
 import {
+  BookOutlined,
   CheckCircleOutlined,
   CloseOutlined,
   CloudUploadOutlined,
+  DeleteOutlined,
   EditOutlined,
   FileSearchOutlined,
   MessageOutlined,
+  PlusOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
   UploadOutlined
 } from '@ant-design/icons-vue';
 import { message } from 'ant-design-vue';
+import { correctionMemories, removeCorrectionMemory } from './dictMemory';
 
 type EmployeeKind = 'TMS' | '微信群';
 type LoginType = '短信验证码' | '手机扫码' | '图形验证码' | '无验证';
-type ConfigTab = 'employees' | 'wechatGroups';
+type ConfigTab = 'employees' | 'wechatGroups' | 'dictionary';
+
+// 企业字典：开集字段走别名映射，闭集字段绑主数据做纠错，跨字段用联动规则
+type DictTab = 'alias' | 'controlled' | 'rules';
+type MatchMode = '精确' | '包含' | '正则';
+type AliasSource = '手工录入' | '历史挖掘' | '用户修正';
+type DictDimension = '装货客户' | '卸货客户' | '货物名称' | '矿别' | '线路' | '磅单员' | '承运单位';
+
+interface DictAlias {
+  text: string;
+  mode: MatchMode;
+  priority: number;
+  source: AliasSource;
+}
+
+interface DictEntry {
+  id: string;
+  dimension: DictDimension;
+  standard: string;
+  code?: string;
+  enterpriseId: string;
+  projectId?: string;
+  aliases: DictAlias[];
+  hitCount: number;
+  lastHitAt?: string;
+  enabled: boolean;
+}
+
+// 历史数据挖掘出的疑似同义组，待运营确认合并
+interface DictCandidate {
+  id: string;
+  dimension: DictDimension;
+  similarity: number;
+  values: Array<{ text: string; count: number }>;
+}
+
+// 受控值集：车牌/司机/承运单位绑定车辆档案，只做纠错不建别名
+interface ControlledField {
+  key: string;
+  label: string;
+  source: string;
+  valueCount: number;
+  desc: string;
+}
+
+// 线路白名单：装货地 + 卸货地 → 标准线路，用户可自行新增
+interface RouteRule {
+  id: string;
+  enterpriseId: string;
+  loadingPlace: string;
+  unloadingPlace: string;
+  route: string;
+  enabled: boolean;
+}
+
+// R3 客户 → 允许货物；R4 货物 → 允许矿别。结构相同，都是「主体 + 允许值清单」
+interface AllowRule {
+  id: string;
+  enterpriseId: string;
+  subject: string;
+  allowed: string[];
+  enabled: boolean;
+}
 
 interface WechatGroup {
   id: string;
@@ -239,6 +305,186 @@ const wechatGroups = ref<WechatGroup[]>([
   }
 ]);
 
+// ===== 企业字典 =====
+const dictDimensions: DictDimension[] = ['装货客户', '卸货客户', '货物名称', '矿别', '线路', '磅单员', '承运单位'];
+
+const dictEntries = ref<DictEntry[]>([
+  {
+    id: 'dict-1',
+    dimension: '装货客户',
+    standard: '云南省煤炭交易（储配）中心有限公司',
+    code: 'CUST-001',
+    enterpriseId: 'southwest-line',
+    projectId: 'p-yunnan-coal',
+    aliases: [
+      { text: '云南煤炭交易中心', mode: '精确', priority: 1, source: '手工录入' },
+      { text: '煤炭储配中心', mode: '精确', priority: 2, source: '历史挖掘' },
+      { text: '云南省煤炭交易', mode: '包含', priority: 3, source: '手工录入' }
+    ],
+    hitCount: 12,
+    lastHitAt: '2026-06-29',
+    enabled: true
+  },
+  {
+    id: 'dict-2',
+    dimension: '货物名称',
+    standard: '氧化铝',
+    code: 'GOODS-003',
+    enterpriseId: 'huayin-logistics',
+    aliases: [
+      { text: '散装氧化铝', mode: '精确', priority: 1, source: '历史挖掘' },
+      { text: '氧化铝粉', mode: '精确', priority: 2, source: '手工录入' }
+    ],
+    hitCount: 9,
+    lastHitAt: '2026-06-28',
+    enabled: true
+  },
+  {
+    id: 'dict-3',
+    dimension: '卸货客户',
+    standard: '曲靖园区料场',
+    enterpriseId: 'qujing-jieyun',
+    projectId: 'p-qujing-sand',
+    aliases: [{ text: '曲靖料场', mode: '精确', priority: 1, source: '历史挖掘' }],
+    hitCount: 4,
+    lastHitAt: '2026-06-27',
+    enabled: true
+  },
+  {
+    id: 'dict-4',
+    dimension: '承运单位',
+    standard: '云志合通科技（云南）有限公司',
+    code: 'CARR-001',
+    enterpriseId: 'southwest-line',
+    aliases: [
+      { text: '云志合通', mode: '包含', priority: 1, source: '手工录入' },
+      { text: '云南云志合通', mode: '精确', priority: 2, source: '手工录入' }
+    ],
+    hitCount: 9,
+    lastHitAt: '2026-06-29',
+    enabled: true
+  },
+  {
+    id: 'dict-5',
+    dimension: '磅单员',
+    standard: '伍敏通',
+    enterpriseId: 'southwest-line',
+    aliases: [
+      { text: '伍敏', mode: '精确', priority: 1, source: '历史挖掘' },
+      { text: '五敏通', mode: '精确', priority: 2, source: '历史挖掘' }
+    ],
+    hitCount: 4,
+    lastHitAt: '2026-06-29',
+    enabled: true
+  },
+  {
+    id: 'dict-6',
+    dimension: '矿别',
+    standard: '32-2',
+    enterpriseId: 'southwest-line',
+    aliases: [
+      { text: '32—2', mode: '精确', priority: 1, source: '历史挖掘' },
+      { text: '^32[-—_]?2$', mode: '正则', priority: 3, source: '手工录入' }
+    ],
+    hitCount: 4,
+    lastHitAt: '2026-06-29',
+    enabled: true
+  },
+  {
+    id: 'dict-7',
+    dimension: '线路',
+    standard: '砚山→靖西天桂',
+    enterpriseId: 'southwest-line',
+    projectId: 'p-yunnan-coal',
+    aliases: [
+      { text: '砚山-靖西', mode: '精确', priority: 1, source: '历史挖掘' },
+      { text: '砚山一靖西', mode: '精确', priority: 2, source: '历史挖掘' }
+    ],
+    hitCount: 6,
+    lastHitAt: '2026-06-28',
+    enabled: true
+  }
+]);
+
+const dictCandidates = ref<DictCandidate[]>([
+  {
+    id: 'cand-1',
+    dimension: '装货客户',
+    similarity: 92,
+    values: [
+      { text: '云南省煤炭交易（储配）中心有限公司', count: 2 },
+      { text: '云南煤炭交易中心', count: 2 }
+    ]
+  },
+  {
+    id: 'cand-2',
+    dimension: '磅单员',
+    similarity: 88,
+    values: [
+      { text: '陈会计', count: 6 },
+      { text: '陈会记', count: 1 }
+    ]
+  },
+  {
+    id: 'cand-3',
+    dimension: '货物名称',
+    similarity: 85,
+    values: [
+      { text: '砂石料', count: 4 },
+      { text: '机制砂', count: 2 }
+    ]
+  }
+]);
+
+const controlledFields: ControlledField[] = [
+  { key: 'vehiclePlate', label: '车牌号', source: '车辆档案 vehicles.plate', valueCount: 54, desc: '字符纠错表归一后回档案精确校验，不在档标疑点' },
+  { key: 'driver', label: '驾驶员', source: '车辆档案 vehicles.driver', valueCount: 54, desc: '优先按车牌联动反查，识别文本仅做同音/形近确认' },
+  { key: 'carrier', label: '承运单位', source: '车辆档案 vehicles.owner', valueCount: 3, desc: '按车牌联动反查；别名字典兜底（如「云志合通」简称）' }
+];
+
+// 车牌 OCR 字符混淆对：全局一张表，双向纠错
+const plateConfusionPairs = ref<Array<{ a: string; b: string }>>([
+  { a: '0', b: 'O' },
+  { a: '1', b: 'I' },
+  { a: '8', b: 'B' },
+  { a: '2', b: 'Z' },
+  { a: '5', b: 'S' },
+  { a: '6', b: 'G' },
+  { a: '4', b: 'A' }
+]);
+
+const routeRules = ref<RouteRule[]>([
+  { id: 'route-1', enterpriseId: 'southwest-line', loadingPlace: '云南省煤炭交易（储配）中心有限公司', unloadingPlace: '广西德保电厂', route: '砚山→德保电厂', enabled: true },
+  { id: 'route-2', enterpriseId: 'southwest-line', loadingPlace: '云南砚山矿务', unloadingPlace: '靖西天桂铝业', route: '砚山→靖西天桂', enabled: true },
+  { id: 'route-3', enterpriseId: 'huayin-logistics', loadingPlace: '广西华银铝业', unloadingPlace: '田东华银料场', route: '华银→田东', enabled: true },
+  { id: 'route-4', enterpriseId: 'qujing-jieyun', loadingPlace: '富源采石场', unloadingPlace: '曲靖园区料场', route: '富源采石场→曲靖园区', enabled: true }
+]);
+
+// 联动规则可配置：启用开关 + 冲突动作
+type RuleAction = '自动纠正并标疑点' | '仅标疑点';
+
+const linkRules = ref([
+  { id: 'R1', name: '车牌 → 驾驶员 / 承运单位 / 挂车', desc: '按车辆档案反查，识别结果与档案不符时按冲突动作处理', kind: '档案联动', enabled: true, action: '自动纠正并标疑点' as RuleAction },
+  { id: 'R2', name: '装货地 + 卸货地 → 线路白名单', desc: '组合不在下方白名单内时按冲突动作处理；白名单支持运营自行新增映射', kind: '白名单', enabled: true, action: '仅标疑点' as RuleAction },
+  { id: 'R3', name: '客户 → 允许货物', desc: '如华银铝业只应出现氧化铝类货物，越界按冲突动作处理', kind: '约束', enabled: false, action: '仅标疑点' as RuleAction },
+  { id: 'R4', name: '货物 → 允许矿别', desc: '如褐煤32只应对应矿别 32-2，越界按冲突动作处理', kind: '约束', enabled: false, action: '仅标疑点' as RuleAction }
+]);
+
+// R3/R4 映射表：预置值取自真实磅单组合
+const customerGoodsRules = ref<AllowRule[]>([
+  { id: 'cg-1', enterpriseId: 'huayin-logistics', subject: '广西华银铝业', allowed: ['氧化铝', '散装氧化铝'], enabled: true },
+  { id: 'cg-2', enterpriseId: 'huayin-logistics', subject: '田东华银料场', allowed: ['氧化铝'], enabled: true },
+  { id: 'cg-3', enterpriseId: 'southwest-line', subject: '广西德保电厂', allowed: ['褐煤32'], enabled: true },
+  { id: 'cg-4', enterpriseId: 'qujing-jieyun', subject: '曲靖园区料场', allowed: ['砂石料', '机制砂'], enabled: true }
+]);
+
+const goodsMineRules = ref<AllowRule[]>([
+  { id: 'gm-1', enterpriseId: 'southwest-line', subject: '褐煤32', allowed: ['32-2'], enabled: true },
+  { id: 'gm-2', enterpriseId: 'huayin-logistics', subject: '氧化铝', allowed: ['A-20', 'A-21', 'H-06', 'H-08'], enabled: true },
+  { id: 'gm-3', enterpriseId: 'qujing-jieyun', subject: '砂石料', allowed: ['S-02'], enabled: true },
+  { id: 'gm-4', enterpriseId: 'qujing-jieyun', subject: '机制砂', allowed: ['M-11'], enabled: true }
+]);
+
 const dataEmployees = ref<DataEmployee[]>([
   {
     id: 'wechat-yunnan-coal',
@@ -355,8 +601,340 @@ const formGroupSearchResults = computed(() => {
 
 const opsMenuItems: Array<{ desc: string; icon: unknown; id: ConfigTab; label: string }> = [
   { id: 'employees', label: '数据员工配置', desc: '微信群、Skill 与验证', icon: TeamOutlined },
-  { id: 'wechatGroups', label: '微信群列表', desc: '底层可接入的运营微信群', icon: MessageOutlined }
+  { id: 'wechatGroups', label: '微信群列表', desc: '底层可接入的运营微信群', icon: MessageOutlined },
+  { id: 'dictionary', label: '企业字典', desc: '别名映射、受控值集与联动规则', icon: BookOutlined }
 ];
+
+// ===== 企业字典交互状态 =====
+const dictTab = ref<DictTab>('alias');
+const dictEnterpriseFilter = ref('all');
+const dictDimensionFilter = ref<'all' | DictDimension>('all');
+const dictKeyword = ref('');
+const isDictModalOpen = ref(false);
+const editingDictId = ref('');
+const isRouteModalOpen = ref(false);
+// 修正记忆 / 挖掘候选改为独立弹窗入口，避免占用主表空间
+const isMemoryDrawerOpen = ref(false);
+const isCandidateDrawerOpen = ref(false);
+
+const dictForm = reactive({
+  dimension: '装货客户' as DictDimension,
+  standard: '',
+  code: '',
+  enterpriseId: 'southwest-line',
+  projectId: '',
+  aliases: [] as DictAlias[]
+});
+
+const routeForm = reactive({
+  enterpriseId: 'southwest-line',
+  loadingPlace: '',
+  unloadingPlace: '',
+  route: ''
+});
+
+const filteredDictEntries = computed(() =>
+  dictEntries.value.filter((entry) => {
+    if (dictEnterpriseFilter.value !== 'all' && entry.enterpriseId !== dictEnterpriseFilter.value) return false;
+    if (dictDimensionFilter.value !== 'all' && entry.dimension !== dictDimensionFilter.value) return false;
+    const keyword = dictKeyword.value.trim();
+    if (!keyword) return true;
+    return entry.standard.includes(keyword) || entry.aliases.some((alias) => alias.text.includes(keyword));
+  })
+);
+
+const dictStats = computed(() => ({
+  entries: dictEntries.value.length,
+  aliases: dictEntries.value.reduce((sum, entry) => sum + entry.aliases.length, 0),
+  hits: dictEntries.value.reduce((sum, entry) => sum + entry.hitCount, 0),
+  candidates: dictCandidates.value.length,
+  memories: correctionMemories.value.length
+}));
+
+const dictFormProjects = computed(() => tenantProjects.filter((project) => project.enterpriseId === dictForm.enterpriseId));
+const isEditingDict = computed(() => editingDictId.value.length > 0);
+
+// 修正记忆分流：开集维度可转别名；车牌/驾驶员属受控字段，仅提示（应修档案或纠错表）
+const aliasMemories = computed(() => correctionMemories.value.filter((item) => (dictDimensions as string[]).includes(item.dimension)));
+const controlledMemories = computed(() => correctionMemories.value.filter((item) => !(dictDimensions as string[]).includes(item.dimension)));
+
+const filteredRouteRules = computed(() =>
+  routeRules.value.filter((rule) => dictEnterpriseFilter.value === 'all' || rule.enterpriseId === dictEnterpriseFilter.value)
+);
+
+function dictEnterpriseName(enterpriseId: string) {
+  return tenantEnterprises.find((item) => item.id === enterpriseId)?.shortName ?? '-';
+}
+
+function dictProjectName(projectId?: string) {
+  if (!projectId) return '全企业生效';
+  return tenantProjects.find((item) => item.id === projectId)?.name ?? '-';
+}
+
+function matchModeColor(mode: MatchMode) {
+  return mode === '精确' ? 'green' : mode === '包含' ? 'blue' : 'orange';
+}
+
+function openCreateDictModal() {
+  editingDictId.value = '';
+  dictForm.dimension = dictDimensionFilter.value === 'all' ? '装货客户' : dictDimensionFilter.value;
+  dictForm.standard = '';
+  dictForm.code = '';
+  dictForm.enterpriseId = dictEnterpriseFilter.value === 'all' ? 'southwest-line' : dictEnterpriseFilter.value;
+  dictForm.projectId = '';
+  dictForm.aliases = [{ text: '', mode: '精确', priority: 1, source: '手工录入' }];
+  isDictModalOpen.value = true;
+}
+
+function openEditDictModal(entry: DictEntry) {
+  editingDictId.value = entry.id;
+  dictForm.dimension = entry.dimension;
+  dictForm.standard = entry.standard;
+  dictForm.code = entry.code ?? '';
+  dictForm.enterpriseId = entry.enterpriseId;
+  dictForm.projectId = entry.projectId ?? '';
+  dictForm.aliases = entry.aliases.map((alias) => ({ ...alias }));
+  isDictModalOpen.value = true;
+}
+
+function closeDictModal() {
+  isDictModalOpen.value = false;
+  editingDictId.value = '';
+}
+
+function addDictAlias() {
+  dictForm.aliases.push({ text: '', mode: '精确', priority: dictForm.aliases.length + 1, source: '手工录入' });
+}
+
+function removeDictAlias(index: number) {
+  dictForm.aliases.splice(index, 1);
+}
+
+function confirmDictEntry() {
+  const standard = dictForm.standard.trim();
+  if (!standard) {
+    message.error('请填写标准值');
+    return;
+  }
+  const aliases = dictForm.aliases.map((alias) => ({ ...alias, text: alias.text.trim() })).filter((alias) => alias.text);
+  if (!aliases.length) {
+    message.error('请至少填写一条别名');
+    return;
+  }
+
+  if (isEditingDict.value) {
+    const target = dictEntries.value.find((entry) => entry.id === editingDictId.value);
+    if (target) {
+      target.dimension = dictForm.dimension;
+      target.standard = standard;
+      target.code = dictForm.code.trim() || undefined;
+      target.enterpriseId = dictForm.enterpriseId;
+      target.projectId = dictForm.projectId || undefined;
+      target.aliases = aliases;
+    }
+    message.success(`字典项「${standard}」已保存`);
+  } else {
+    dictEntries.value.unshift({
+      id: `dict-${dictEntries.value.length + 1}-${standard.slice(0, 4)}`,
+      dimension: dictForm.dimension,
+      standard,
+      code: dictForm.code.trim() || undefined,
+      enterpriseId: dictForm.enterpriseId,
+      projectId: dictForm.projectId || undefined,
+      aliases,
+      hitCount: 0,
+      enabled: true
+    });
+    message.success(`已新增字典项「${standard}」，${aliases.length} 条别名`);
+  }
+  closeDictModal();
+}
+
+function toggleDictEntry(entry: DictEntry) {
+  entry.enabled = !entry.enabled;
+  message.success(`「${entry.standard}」已${entry.enabled ? '启用' : '停用'}`);
+}
+
+// 挖掘候选：取出现次数最多的值作标准值，其余转为别名
+function mergeCandidate(candidate: DictCandidate) {
+  const sorted = [...candidate.values].sort((a, b) => b.count - a.count);
+  const standard = sorted[0];
+  const aliases: DictAlias[] = sorted.slice(1).map((item, index) => ({
+    text: item.text,
+    mode: '精确' as MatchMode,
+    priority: index + 1,
+    source: '历史挖掘' as AliasSource
+  }));
+  dictEntries.value.unshift({
+    id: `dict-merged-${candidate.id}`,
+    dimension: candidate.dimension,
+    standard: standard.text,
+    enterpriseId: dictEnterpriseFilter.value === 'all' ? 'southwest-line' : dictEnterpriseFilter.value,
+    aliases,
+    hitCount: 0,
+    enabled: true
+  });
+  dictCandidates.value = dictCandidates.value.filter((item) => item.id !== candidate.id);
+  message.success(`已合并为「${standard.text}」，新增 ${aliases.length} 条别名`);
+}
+
+function ignoreCandidate(candidate: DictCandidate) {
+  dictCandidates.value = dictCandidates.value.filter((item) => item.id !== candidate.id);
+  message.success('已忽略该候选组');
+}
+
+// 用户修正记忆 → 别名：已有同标准值的字典项则并入，否则新建
+function adoptMemory(memory: (typeof correctionMemories.value)[number]) {
+  const dimension = memory.dimension as DictDimension;
+  const existing = dictEntries.value.find((entry) => entry.dimension === dimension && entry.standard === memory.to);
+  if (existing) {
+    if (existing.aliases.some((alias) => alias.text === memory.from)) {
+      message.info('该别名已存在于字典中');
+      removeCorrectionMemory(memory.id);
+      return;
+    }
+    existing.aliases.push({
+      text: memory.from,
+      mode: '精确',
+      priority: existing.aliases.length + 1,
+      source: '用户修正'
+    });
+    message.success(`已并入「${memory.to}」，新增别名「${memory.from}」`);
+  } else {
+    dictEntries.value.unshift({
+      id: `dict-mem-${memory.id}`,
+      dimension,
+      standard: memory.to,
+      enterpriseId: dictEnterpriseFilter.value === 'all' ? 'southwest-line' : dictEnterpriseFilter.value,
+      aliases: [{ text: memory.from, mode: '精确', priority: 1, source: '用户修正' }],
+      hitCount: 0,
+      enabled: true
+    });
+    message.success(`已按修正记忆新建字典项「${memory.to}」`);
+  }
+  removeCorrectionMemory(memory.id);
+}
+
+function discardMemory(memory: (typeof correctionMemories.value)[number]) {
+  removeCorrectionMemory(memory.id);
+  message.success('已忽略该条修正记忆');
+}
+
+function openRouteModal() {
+  routeForm.enterpriseId = dictEnterpriseFilter.value === 'all' ? 'southwest-line' : dictEnterpriseFilter.value;
+  routeForm.loadingPlace = '';
+  routeForm.unloadingPlace = '';
+  routeForm.route = '';
+  isRouteModalOpen.value = true;
+}
+
+function confirmRouteRule() {
+  const loading = routeForm.loadingPlace.trim();
+  const unloading = routeForm.unloadingPlace.trim();
+  const route = routeForm.route.trim();
+  if (!loading || !unloading || !route) {
+    message.error('装货地、卸货地、标准线路都需要填写');
+    return;
+  }
+  routeRules.value.unshift({
+    id: `route-${routeRules.value.length + 1}`,
+    enterpriseId: routeForm.enterpriseId,
+    loadingPlace: loading,
+    unloadingPlace: unloading,
+    route,
+    enabled: true
+  });
+  isRouteModalOpen.value = false;
+  message.success(`已新增线路映射「${route}」`);
+}
+
+function toggleRouteRule(rule: RouteRule) {
+  rule.enabled = !rule.enabled;
+  message.success(`线路「${rule.route}」已${rule.enabled ? '启用' : '停用'}`);
+}
+
+function toggleLinkRule(rule: (typeof linkRules.value)[number]) {
+  rule.enabled = !rule.enabled;
+  message.success(`规则 ${rule.id} 已${rule.enabled ? '启用' : '停用'}`);
+}
+
+function setLinkRuleAction(rule: (typeof linkRules.value)[number], action: RuleAction) {
+  rule.action = action;
+  message.success(`规则 ${rule.id} 冲突动作已改为「${action}」`);
+}
+
+// R3/R4 映射表：同一套增删/启停逻辑，按 kind 区分落到哪张表
+const isAllowModalOpen = ref(false);
+const allowModalKind = ref<'customerGoods' | 'goodsMine'>('customerGoods');
+const allowForm = reactive({
+  enterpriseId: 'southwest-line',
+  subject: '',
+  allowedText: ''
+});
+
+const allowRulesRef = computed(() => (allowModalKind.value === 'customerGoods' ? customerGoodsRules : goodsMineRules));
+
+const filteredCustomerGoodsRules = computed(() =>
+  customerGoodsRules.value.filter((rule) => dictEnterpriseFilter.value === 'all' || rule.enterpriseId === dictEnterpriseFilter.value)
+);
+
+const filteredGoodsMineRules = computed(() =>
+  goodsMineRules.value.filter((rule) => dictEnterpriseFilter.value === 'all' || rule.enterpriseId === dictEnterpriseFilter.value)
+);
+
+function openAllowModal(kind: 'customerGoods' | 'goodsMine') {
+  allowModalKind.value = kind;
+  allowForm.enterpriseId = dictEnterpriseFilter.value === 'all' ? 'southwest-line' : dictEnterpriseFilter.value;
+  allowForm.subject = '';
+  allowForm.allowedText = '';
+  isAllowModalOpen.value = true;
+}
+
+function confirmAllowRule() {
+  const subject = allowForm.subject.trim();
+  const allowed = allowForm.allowedText
+    .split(/[、,，;；\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!subject || !allowed.length) {
+    message.error(allowModalKind.value === 'customerGoods' ? '请填写客户与允许货物' : '请填写货物与允许矿别');
+    return;
+  }
+  const target = allowRulesRef.value;
+  target.value.unshift({
+    id: `${allowModalKind.value === 'customerGoods' ? 'cg' : 'gm'}-${target.value.length + 1}-${subject.slice(0, 4)}`,
+    enterpriseId: allowForm.enterpriseId,
+    subject,
+    allowed,
+    enabled: true
+  });
+  isAllowModalOpen.value = false;
+  message.success(`已新增「${subject}」的允许清单（${allowed.length} 项）`);
+}
+
+function toggleAllowRule(rule: AllowRule) {
+  rule.enabled = !rule.enabled;
+  message.success(`「${rule.subject}」已${rule.enabled ? '启用' : '停用'}`);
+}
+
+function removeAllowRule(kind: 'customerGoods' | 'goodsMine', rule: AllowRule) {
+  const target = kind === 'customerGoods' ? customerGoodsRules : goodsMineRules;
+  target.value = target.value.filter((item) => item.id !== rule.id);
+  message.success(`已删除「${rule.subject}」的允许清单`);
+}
+
+function removeRouteRule(rule: RouteRule) {
+  routeRules.value = routeRules.value.filter((item) => item.id !== rule.id);
+  message.success(`已删除线路映射「${rule.route}」`);
+}
+
+function addPlateConfusionPair() {
+  plateConfusionPairs.value.push({ a: '', b: '' });
+}
+
+function removePlateConfusionPair(index: number) {
+  plateConfusionPairs.value.splice(index, 1);
+}
 
 
 function groupById(groupId: string) {
@@ -1020,6 +1598,334 @@ function validateEmployee() {
       </div>
           </section>
         </template>
+
+        <template v-else-if="activeTab === 'dictionary'">
+          <section class="ops-panel dict-panel">
+            <div class="ops-panel-head">
+              <div>
+                <h2>企业字典</h2>
+                <p>把识别出的自由文本归一到标准值，提升磅单抓取准确率。精确别名命中后自动改写，包含 / 正则仅提示。</p>
+              </div>
+              <div class="ops-actions">
+                <a-button v-if="dictTab === 'alias'" type="primary" @click="openCreateDictModal">
+                  <template #icon><PlusOutlined /></template>
+                  新增字典项
+                </a-button>
+              </div>
+            </div>
+
+            <div class="dict-body">
+              <div class="dict-stat-row">
+                <div><span>字典项</span><strong>{{ dictStats.entries }}</strong></div>
+                <div><span>别名总数</span><strong>{{ dictStats.aliases }}</strong></div>
+                <div><span>累计命中</span><strong>{{ dictStats.hits }}</strong></div>
+                <button type="button" class="dict-stat-entry ok" @click="isMemoryDrawerOpen = true">
+                  <span>用户修正记忆</span>
+                  <strong>{{ dictStats.memories }}</strong>
+                  <em>点击处理 ›</em>
+                </button>
+                <button type="button" class="dict-stat-entry warn" @click="isCandidateDrawerOpen = true">
+                  <span>待确认候选</span>
+                  <strong>{{ dictStats.candidates }}</strong>
+                  <em>点击处理 ›</em>
+                </button>
+              </div>
+
+              <div class="dict-tabs">
+                <button type="button" :class="{ active: dictTab === 'alias' }" @click="dictTab = 'alias'">别名字典</button>
+                <button type="button" :class="{ active: dictTab === 'controlled' }" @click="dictTab = 'controlled'">受控值集 / 纠错</button>
+                <button type="button" :class="{ active: dictTab === 'rules' }" @click="dictTab = 'rules'">联动规则</button>
+              </div>
+
+              <div class="dict-filter-bar">
+                <a-select v-model:value="dictEnterpriseFilter" class="dict-select">
+                  <a-select-option value="all">全部企业</a-select-option>
+                  <a-select-option v-for="item in tenantEnterprises" :key="item.id" :value="item.id">{{ item.shortName }}</a-select-option>
+                </a-select>
+                <a-select v-if="dictTab === 'alias'" v-model:value="dictDimensionFilter" class="dict-select">
+                  <a-select-option value="all">全部维度</a-select-option>
+                  <a-select-option v-for="dim in dictDimensions" :key="dim" :value="dim">{{ dim }}</a-select-option>
+                </a-select>
+                <a-input v-if="dictTab === 'alias'" v-model:value="dictKeyword" placeholder="搜索标准值或别名" allow-clear class="dict-search" />
+              </div>
+
+              <!-- 别名字典 -->
+              <template v-if="dictTab === 'alias'">
+                <table class="ops-table dict-table dict-alias-table">
+                  <thead>
+                    <tr>
+                      <th>维度</th>
+                      <th>标准值 / 编码</th>
+                      <th>别名（匹配方式）</th>
+                      <th>归属</th>
+                      <th>命中</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="entry in filteredDictEntries" :key="entry.id" :class="{ disabled: !entry.enabled }">
+                      <td><a-tag color="purple">{{ entry.dimension }}</a-tag></td>
+                      <td>
+                        <strong>{{ entry.standard }}</strong>
+                        <span v-if="entry.code">{{ entry.code }}</span>
+                      </td>
+                      <td>
+                        <div class="dict-alias-cell">
+                          <span v-for="alias in entry.aliases" :key="alias.text" class="dict-alias-chip">
+                            <a-tag :color="matchModeColor(alias.mode)">{{ alias.mode }}</a-tag>
+                            {{ alias.text }}
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <strong>{{ dictEnterpriseName(entry.enterpriseId) }}</strong>
+                        <span>{{ dictProjectName(entry.projectId) }}</span>
+                      </td>
+                      <td>
+                        <strong>{{ entry.hitCount }}</strong>
+                        <span>{{ entry.lastHitAt ?? '未命中' }}</span>
+                      </td>
+                      <td>
+                        <div class="dict-row-actions">
+                          <a-switch :checked="entry.enabled" size="small" @change="toggleDictEntry(entry)" />
+                          <a-button size="small" @click="openEditDictModal(entry)">编辑</a-button>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr v-if="!filteredDictEntries.length">
+                      <td colspan="6" class="dict-empty">当前筛选条件下暂无字典项</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </template>
+
+              <!-- 受控值集 -->
+              <template v-else-if="dictTab === 'controlled'">
+                <p class="dict-note">
+                  这几个字段在系统里已有权威档案，<b>不建别名</b>：识别结果先用字符纠错表归一，再回档案精确校验，不在档的标疑点等人工确认。档案更新后字典自动跟随。
+                </p>
+                <table class="ops-table dict-table">
+                  <thead>
+                    <tr>
+                      <th>字段</th>
+                      <th>权威来源</th>
+                      <th>值数量</th>
+                      <th>治理方式</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="item in controlledFields" :key="item.key">
+                      <td><strong>{{ item.label }}</strong></td>
+                      <td><span class="dict-mono">{{ item.source }}</span></td>
+                      <td><strong>{{ item.valueCount }}</strong></td>
+                      <td><span>{{ item.desc }}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div class="dict-subsection">
+                  <div class="dict-subsection-head">
+                    <div>
+                      <strong>车牌字符纠错表</strong>                      <span>全局共用一张，双向替换后回车辆档案校验，不需要逐台车维护别名</span>
+                    </div>
+                    <a-button size="small" @click="addPlateConfusionPair">
+                      <template #icon><PlusOutlined /></template>
+                      新增混淆对
+                    </a-button>
+                  </div>
+                  <div class="plate-pair-grid">
+                    <div v-for="(pair, index) in plateConfusionPairs" :key="index" class="plate-pair">
+                      <a-input v-model:value="pair.a" size="small" maxlength="2" />
+                      <em>↔</em>
+                      <a-input v-model:value="pair.b" size="small" maxlength="2" />
+                      <button type="button" class="plate-pair-remove" @click="removePlateConfusionPair(index)"><DeleteOutlined /></button>
+                    </div>
+                  </div>
+                  <div class="dict-example">
+                    示例：识别 <b>赣J0352BD</b> → 按 8↔B 纠错得 <b>赣J03528D</b> → 命中车辆档案 → 联动带出驾驶员「罗明」、承运单位「云志合通科技（云南）有限公司」
+                  </div>
+                </div>
+              </template>
+
+              <!-- 联动规则 -->
+              <template v-else>
+                <p class="dict-note">
+                  单字段各自合法、但组合起来不可能的错误，只有跨字段规则能发现。每条规则可单独启停，并选择命中冲突时是「自动纠正并标疑点」还是「仅标疑点」。
+                </p>
+                <table class="ops-table dict-table dict-rule-table">
+                  <thead>
+                    <tr>
+                      <th>规则</th>
+                      <th>类型</th>
+                      <th>冲突动作</th>
+                      <th>启用</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="rule in linkRules" :key="rule.id" :class="{ disabled: !rule.enabled }">
+                      <td>
+                        <strong>{{ rule.id }} · {{ rule.name }}</strong>
+                        <span>{{ rule.desc }}</span>
+                      </td>
+                      <td><a-tag color="blue">{{ rule.kind }}</a-tag></td>
+                      <td>
+                        <a-select
+                          :value="rule.action"
+                          size="small"
+                          :disabled="!rule.enabled"
+                          class="rule-action-select"
+                          @update:value="setLinkRuleAction(rule, $event)"
+                        >
+                          <a-select-option value="自动纠正并标疑点">自动纠正并标疑点</a-select-option>
+                          <a-select-option value="仅标疑点">仅标疑点</a-select-option>
+                        </a-select>
+                      </td>
+                      <td>
+                        <a-switch :checked="rule.enabled" size="small" @change="toggleLinkRule(rule)" />
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div class="dict-subsection" :class="{ 'rule-off': !linkRules[1].enabled }">
+                  <div class="dict-subsection-head">
+                    <div>
+                      <strong>R2 线路白名单</strong>
+                      <span>
+                        装货地 + 卸货地 → 标准线路；组合不在表内则按 R2 冲突动作处理。
+                        <b v-if="!linkRules[1].enabled" class="rule-off-hint">R2 当前未启用，白名单暂不生效</b>
+                      </span>
+                    </div>
+                    <a-button size="small" type="primary" @click="openRouteModal">
+                      <template #icon><PlusOutlined /></template>
+                      新增线路映射
+                    </a-button>
+                  </div>
+                  <table class="ops-table dict-table">
+                    <thead>
+                      <tr>
+                        <th>装货地</th>
+                        <th>卸货地</th>
+                        <th>标准线路</th>
+                        <th>归属企业</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="rule in filteredRouteRules" :key="rule.id" :class="{ disabled: !rule.enabled }">
+                        <td><span>{{ rule.loadingPlace }}</span></td>
+                        <td><span>{{ rule.unloadingPlace }}</span></td>
+                        <td><strong>{{ rule.route }}</strong></td>
+                        <td><span>{{ dictEnterpriseName(rule.enterpriseId) }}</span></td>
+                        <td>
+                          <div class="dict-row-actions">
+                            <a-switch :checked="rule.enabled" size="small" @change="toggleRouteRule(rule)" />
+                            <a-button size="small" danger @click="removeRouteRule(rule)">删除</a-button>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr v-if="!filteredRouteRules.length">
+                        <td colspan="5" class="dict-empty">当前企业暂无线路映射，点击右上角新增</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="dict-subsection" :class="{ 'rule-off': !linkRules[2].enabled }">
+                  <div class="dict-subsection-head">
+                    <div>
+                      <strong>R3 客户 → 允许货物</strong>
+                      <span>
+                        该客户只应出现清单内的货物；识别到清单外货物时按 R3 冲突动作处理。
+                        <b v-if="!linkRules[2].enabled" class="rule-off-hint">R3 当前未启用，清单暂不生效</b>
+                      </span>
+                    </div>
+                    <a-button size="small" type="primary" @click="openAllowModal('customerGoods')">
+                      <template #icon><PlusOutlined /></template>
+                      新增客户货物清单
+                    </a-button>
+                  </div>
+                  <table class="ops-table dict-table">
+                    <thead>
+                      <tr>
+                        <th>客户</th>
+                        <th>允许货物</th>
+                        <th>归属企业</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="rule in filteredCustomerGoodsRules" :key="rule.id" :class="{ disabled: !rule.enabled }">
+                        <td><strong>{{ rule.subject }}</strong></td>
+                        <td>
+                          <div class="dict-alias-cell">
+                            <a-tag v-for="item in rule.allowed" :key="item" color="cyan">{{ item }}</a-tag>
+                          </div>
+                        </td>
+                        <td><span>{{ dictEnterpriseName(rule.enterpriseId) }}</span></td>
+                        <td>
+                          <div class="dict-row-actions">
+                            <a-switch :checked="rule.enabled" size="small" @change="toggleAllowRule(rule)" />
+                            <a-button size="small" danger @click="removeAllowRule('customerGoods', rule)">删除</a-button>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr v-if="!filteredCustomerGoodsRules.length">
+                        <td colspan="4" class="dict-empty">当前企业暂无客户货物清单，点击右上角新增</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="dict-subsection" :class="{ 'rule-off': !linkRules[3].enabled }">
+                  <div class="dict-subsection-head">
+                    <div>
+                      <strong>R4 货物 → 允许矿别</strong>
+                      <span>
+                        该货物只应对应清单内的矿别 / 规格；识别到清单外矿别时按 R4 冲突动作处理。
+                        <b v-if="!linkRules[3].enabled" class="rule-off-hint">R4 当前未启用，清单暂不生效</b>
+                      </span>
+                    </div>
+                    <a-button size="small" type="primary" @click="openAllowModal('goodsMine')">
+                      <template #icon><PlusOutlined /></template>
+                      新增货物矿别清单
+                    </a-button>
+                  </div>
+                  <table class="ops-table dict-table">
+                    <thead>
+                      <tr>
+                        <th>货物</th>
+                        <th>允许矿别 / 规格</th>
+                        <th>归属企业</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="rule in filteredGoodsMineRules" :key="rule.id" :class="{ disabled: !rule.enabled }">
+                        <td><strong>{{ rule.subject }}</strong></td>
+                        <td>
+                          <div class="dict-alias-cell">
+                            <a-tag v-for="item in rule.allowed" :key="item" color="geekblue">{{ item }}</a-tag>
+                          </div>
+                        </td>
+                        <td><span>{{ dictEnterpriseName(rule.enterpriseId) }}</span></td>
+                        <td>
+                          <div class="dict-row-actions">
+                            <a-switch :checked="rule.enabled" size="small" @change="toggleAllowRule(rule)" />
+                            <a-button size="small" danger @click="removeAllowRule('goodsMine', rule)">删除</a-button>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr v-if="!filteredGoodsMineRules.length">
+                        <td colspan="4" class="dict-empty">当前企业暂无货物矿别清单，点击右上角新增</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </template>
+            </div>
+          </section>
+        </template>
       </section>
     </main>
 
@@ -1231,6 +2137,214 @@ function validateEmployee() {
         <a-button type="primary" @click="validateEmployee">验证</a-button>
       </template>
     </a-modal>
+
+    <a-modal
+      v-model:open="isDictModalOpen"
+      :title="isEditingDict ? '编辑字典项' : '新增字典项'"
+      width="760px"
+      ok-text="保存"
+      cancel-text="取消"
+      @ok="confirmDictEntry"
+      @cancel="closeDictModal"
+    >
+      <div class="dict-form">
+        <div class="dict-form-grid">
+          <label>
+            <span>维度</span>
+            <a-select v-model:value="dictForm.dimension">
+              <a-select-option v-for="dim in dictDimensions" :key="dim" :value="dim">{{ dim }}</a-select-option>
+            </a-select>
+          </label>
+          <label>
+            <span>标准值<i>写回业务表的唯一值</i></span>
+            <a-input v-model:value="dictForm.standard" placeholder="如 云南省煤炭交易（储配）中心有限公司" />
+          </label>
+          <label>
+            <span>编码<i>可选</i></span>
+            <a-input v-model:value="dictForm.code" placeholder="如 CUST-001" />
+          </label>
+          <label>
+            <span>归属企业</span>
+            <a-select v-model:value="dictForm.enterpriseId" @change="dictForm.projectId = ''">
+              <a-select-option v-for="item in tenantEnterprises" :key="item.id" :value="item.id">{{ item.shortName }}</a-select-option>
+            </a-select>
+          </label>
+          <label>
+            <span>归属项目<i>留空 = 全企业生效</i></span>
+            <a-select v-model:value="dictForm.projectId" allow-clear placeholder="全企业生效">
+              <a-select-option v-for="item in dictFormProjects" :key="item.id" :value="item.id">{{ item.name }}</a-select-option>
+            </a-select>
+          </label>
+        </div>
+
+        <div class="dict-form-alias">
+          <div class="dict-form-alias-head">
+            <div>
+              <strong>别名</strong>
+              <span>精确命中后自动改写为标准值；包含 / 正则仅在审核页提示，需人工确认</span>
+            </div>
+            <a-button size="small" @click="addDictAlias">
+              <template #icon><PlusOutlined /></template>
+              添加别名
+            </a-button>
+          </div>
+          <div v-for="(alias, index) in dictForm.aliases" :key="index" class="dict-alias-row">
+            <a-input v-model:value="alias.text" placeholder="识别到的文本，如 云南煤炭交易中心" />
+            <a-select v-model:value="alias.mode" class="dict-alias-mode">
+              <a-select-option value="精确">精确</a-select-option>
+              <a-select-option value="包含">包含</a-select-option>
+              <a-select-option value="正则">正则</a-select-option>
+            </a-select>
+            <a-input-number v-model:value="alias.priority" :min="1" :max="99" placeholder="优先级" />
+            <a-tag :color="alias.source === '历史挖掘' ? 'purple' : 'default'">{{ alias.source }}</a-tag>
+            <button type="button" class="plate-pair-remove" @click="removeDictAlias(index)"><DeleteOutlined /></button>
+          </div>
+          <p v-if="!dictForm.aliases.length" class="dict-empty">还没有别名，点击右上角添加</p>
+        </div>
+      </div>
+    </a-modal>
+
+    <a-modal
+      v-model:open="isRouteModalOpen"
+      title="新增线路映射"
+      width="560px"
+      ok-text="保存"
+      cancel-text="取消"
+      @ok="confirmRouteRule"
+    >
+      <div class="dict-form">
+        <p class="dict-note">装货地 + 卸货地组合命中后写入标准线路；未命中的组合会在磅单审核页标疑点。</p>
+        <div class="dict-form-grid single">
+          <label>
+            <span>归属企业</span>
+            <a-select v-model:value="routeForm.enterpriseId">
+              <a-select-option v-for="item in tenantEnterprises" :key="item.id" :value="item.id">{{ item.shortName }}</a-select-option>
+            </a-select>
+          </label>
+          <label>
+            <span>装货地</span>
+            <a-input v-model:value="routeForm.loadingPlace" placeholder="如 云南砚山矿务" />
+          </label>
+          <label>
+            <span>卸货地</span>
+            <a-input v-model:value="routeForm.unloadingPlace" placeholder="如 靖西天桂铝业" />
+          </label>
+          <label>
+            <span>标准线路</span>
+            <a-input v-model:value="routeForm.route" placeholder="如 砚山→靖西天桂" />
+          </label>
+        </div>
+      </div>
+    </a-modal>
+
+    <a-modal
+      v-model:open="isAllowModalOpen"
+      :title="allowModalKind === 'customerGoods' ? '新增客户货物清单' : '新增货物矿别清单'"
+      width="560px"
+      ok-text="保存"
+      cancel-text="取消"
+      @ok="confirmAllowRule"
+    >
+      <div class="dict-form">
+        <p class="dict-note">
+          {{ allowModalKind === 'customerGoods'
+            ? '该客户只应出现清单内的货物，识别到清单外货物时按 R3 冲突动作处理。'
+            : '该货物只应对应清单内的矿别 / 规格，识别到清单外矿别时按 R4 冲突动作处理。' }}
+        </p>
+        <div class="dict-form-grid single">
+          <label>
+            <span>归属企业</span>
+            <a-select v-model:value="allowForm.enterpriseId">
+              <a-select-option v-for="item in tenantEnterprises" :key="item.id" :value="item.id">{{ item.shortName }}</a-select-option>
+            </a-select>
+          </label>
+          <label>
+            <span>{{ allowModalKind === 'customerGoods' ? '客户' : '货物' }}</span>
+            <a-input
+              v-model:value="allowForm.subject"
+              :placeholder="allowModalKind === 'customerGoods' ? '如 广西华银铝业' : '如 褐煤32'"
+            />
+          </label>
+          <label>
+            <span>
+              {{ allowModalKind === 'customerGoods' ? '允许货物' : '允许矿别 / 规格' }}
+              <i>多个用顿号或逗号分隔</i>
+            </span>
+            <a-textarea
+              v-model:value="allowForm.allowedText"
+              :rows="3"
+              :placeholder="allowModalKind === 'customerGoods' ? '如 氧化铝、散装氧化铝' : '如 A-20、A-21、H-06'"
+            />
+          </label>
+        </div>
+      </div>
+    </a-modal>
+
+    <a-modal v-model:open="isMemoryDrawerOpen" title="用户修正记忆" width="720px" :footer="null">
+      <div class="dict-drawer">
+        <p class="dict-note">审核员在磅单审核页手工修正过的值。开集字段确认后转为正式别名；车牌 / 驾驶员等受控字段不建别名，反复修正说明档案或纠错表需要更新。</p>
+
+        <div v-if="aliasMemories.length" class="dict-drawer-section">
+          <strong>可转为别名（{{ aliasMemories.length }} 条）</strong>
+          <div v-for="memory in aliasMemories" :key="memory.id" class="dict-candidate-row">
+            <div class="dict-candidate-meta">
+              <a-tag color="green">{{ memory.dimension }}</a-tag>
+              <em>修正 {{ memory.count }} 次 · {{ memory.lastAt }}</em>
+            </div>
+            <div class="dict-memory-diff">
+              <span class="from">{{ memory.from }}</span>
+              <i>→</i>
+              <span class="to">{{ memory.to }}</span>
+              <em>{{ memory.source }}</em>
+            </div>
+            <div class="dict-candidate-actions">
+              <a-button size="small" type="primary" @click="adoptMemory(memory)">转为别名</a-button>
+              <a-button size="small" @click="discardMemory(memory)">忽略</a-button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="controlledMemories.length" class="dict-drawer-section">
+          <strong>受控字段修正（{{ controlledMemories.length }} 条，请检查档案 / 纠错表）</strong>
+          <div v-for="memory in controlledMemories" :key="memory.id" class="dict-candidate-row">
+            <div class="dict-candidate-meta">
+              <a-tag color="orange">{{ memory.dimension }}</a-tag>
+              <em>修正 {{ memory.count }} 次 · {{ memory.lastAt }}</em>
+            </div>
+            <div class="dict-memory-diff">
+              <span class="from">{{ memory.from }}</span>
+              <i>→</i>
+              <span class="to">{{ memory.to }}</span>
+            </div>
+            <div class="dict-candidate-actions">
+              <a-button size="small" @click="discardMemory(memory)">已处理</a-button>
+            </div>
+          </div>
+        </div>
+
+        <p v-if="!aliasMemories.length && !controlledMemories.length" class="dict-empty">暂无修正记忆。审核页保存修改后会自动出现在这里。</p>
+      </div>
+    </a-modal>
+
+    <a-modal v-model:open="isCandidateDrawerOpen" title="待确认候选" width="720px" :footer="null">
+      <div class="dict-drawer">
+        <p class="dict-note">系统扫描历史磅单，按相似度聚合出的疑似同义值。「合并」取出现次数最多的作标准值，其余转为别名。</p>
+        <div v-for="candidate in dictCandidates" :key="candidate.id" class="dict-candidate-row">
+          <div class="dict-candidate-meta">
+            <a-tag color="purple">{{ candidate.dimension }}</a-tag>
+            <em>相似度 {{ candidate.similarity }}%</em>
+          </div>
+          <div class="dict-candidate-values">
+            <span v-for="value in candidate.values" :key="value.text">{{ value.text }}<i>{{ value.count }} 条</i></span>
+          </div>
+          <div class="dict-candidate-actions">
+            <a-button size="small" type="primary" @click="mergeCandidate(candidate)">合并</a-button>
+            <a-button size="small" @click="ignoreCandidate(candidate)">忽略</a-button>
+          </div>
+        </div>
+        <p v-if="!dictCandidates.length" class="dict-empty">暂无待确认候选，历史数据已全部归一。</p>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -1441,7 +2555,7 @@ function validateEmployee() {
 
 .agentops-page {
   display: grid;
-  align-content: start;
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   height: 100%;
   min-height: 0;
@@ -2371,6 +3485,493 @@ function validateEmployee() {
 @media (max-width: 1440px) {
   .ops-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ===== 企业字典 ===== */
+.dict-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.dict-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+.dict-stat-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.dict-stat-row > div,
+.dict-stat-entry {
+  padding: 10px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+
+.dict-stat-entry {
+  position: relative;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: box-shadow 0.15s;
+}
+
+.dict-stat-entry em {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.dict-stat-entry.ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.dict-stat-entry.ok:hover {
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.16);
+}
+
+.dict-stat-entry.warn {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.dict-stat-entry.warn:hover {
+  box-shadow: 0 0 0 2px rgba(234, 88, 12, 0.16);
+}
+
+.dict-stat-row span,
+.dict-stat-entry span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.dict-stat-row strong,
+.dict-stat-entry strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 18px;
+  color: #0f172a;
+}
+
+.dict-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dict-tabs button {
+  padding: 7px 16px;
+  border: 1px solid #d6dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: #475569;
+}
+
+.dict-tabs button.active {
+  border-color: #0f172a;
+  background: #0f172a;
+  color: #ffffff;
+}
+
+.dict-filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dict-select {
+  min-width: 150px;
+}
+
+.dict-search {
+  max-width: 260px;
+}
+
+.dict-drawer {
+  max-height: 62vh;
+  overflow: auto;
+}
+
+.dict-drawer-section {
+  margin-bottom: 14px;
+}
+
+.dict-drawer-section > strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.dict-drawer .dict-candidate-row {
+  margin-top: 0;
+  margin-bottom: 8px;
+  border-color: #e2e8f0;
+}
+
+.dict-memory-diff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.dict-memory-diff .from {
+  padding: 3px 9px;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background: #fef2f2;
+  color: #b91c1c;
+  text-decoration: line-through;
+}
+
+.dict-memory-diff .to {
+  padding: 3px 9px;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  background: #f0fdf4;
+  color: #166534;
+  font-weight: 600;
+}
+
+.dict-memory-diff i {
+  color: #94a3b8;
+  font-style: normal;
+}
+
+.dict-memory-diff em {
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.dict-candidate-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid #fde6c8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.dict-candidate-meta em {
+  display: block;
+  margin-top: 4px;
+  color: #b45309;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.dict-candidate-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dict-candidate-values span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 12px;
+}
+
+.dict-candidate-values i {
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.dict-candidate-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.dict-table td > span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.dict-table {
+  border: 1px solid #e2e8f0;
+}
+
+/* 嵌套在小节里的表格不参与外层滚动吸顶 */
+.dict-subsection .dict-table th {
+  position: static;
+}
+
+.dict-table tr:last-child td {
+  border-bottom: 0;
+}
+
+/* 停用行只淡化文本，开关/按钮保持清晰可点 */
+.dict-table tr.disabled td > strong,
+.dict-table tr.disabled td > span,
+.dict-table tr.disabled .dict-alias-cell {
+  opacity: 0.45;
+}
+
+/* 联动规则表：说明并入规则列，动作列固定宽 */
+.dict-rule-table th:nth-child(3) {
+  width: 190px;
+}
+
+.dict-rule-table th:nth-child(2),
+.dict-rule-table th:last-child {
+  width: 90px;
+}
+
+.rule-action-select {
+  width: 170px;
+}
+
+.dict-subsection.rule-off {
+  opacity: 0.55;
+}
+
+.rule-off-hint {
+  margin-left: 6px;
+  color: #d97706;
+  font-weight: 600;
+}
+
+.dict-alias-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dict-alias-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px 2px 2px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 12px;
+}
+
+.dict-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dict-empty {
+  padding: 18px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.dict-note {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.dict-mono {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+}
+
+.dict-subsection {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #ffffff;
+}
+
+.dict-subsection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.dict-subsection-head strong {
+  display: block;
+  font-size: 13px;
+}
+
+.dict-subsection-head span {
+  display: block;
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.plate-pair-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plate-pair {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.plate-pair :deep(.ant-input) {
+  width: 40px;
+  text-align: center;
+}
+
+.plate-pair em {
+  color: #94a3b8;
+  font-style: normal;
+}
+
+.plate-pair-remove {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: #cbd5e1;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.plate-pair-remove:hover {
+  color: #dc2626;
+}
+
+.dict-example {
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.dict-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dict-form-grid.single {
+  grid-template-columns: 1fr;
+}
+
+.dict-form-grid label span {
+  display: block;
+  margin-bottom: 5px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dict-form-grid label span i {
+  margin-left: 6px;
+  color: #94a3b8;
+  font-weight: 400;
+  font-style: normal;
+}
+
+.dict-form-grid label :deep(.ant-select),
+.dict-form-grid label :deep(.ant-input) {
+  width: 100%;
+}
+
+.dict-form-alias {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+
+.dict-form-alias-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.dict-form-alias-head strong {
+  display: block;
+  font-size: 13px;
+}
+
+.dict-form-alias-head span {
+  display: block;
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.dict-alias-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px 90px auto auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* 列宽：仅别名字典主表，别名列吃掉剩余空间 */
+.dict-alias-table th:nth-child(3) {
+  width: 34%;
+}
+
+.dict-alias-table th:last-child {
+  width: 132px;
+}
+
+@media (max-width: 1440px) {
+  .dict-stat-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dict-candidate-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .dict-form-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

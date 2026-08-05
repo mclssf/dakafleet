@@ -46,6 +46,7 @@ import {
   weighBills
 } from './data';
 import type { AgentMessage, AuditStatus, Expense, FieldBox, PageKey, Project, WeighBill } from './types';
+import { dimensionForField, recordCorrection } from './dictMemory';
 
 const pageHashMap: Record<PageKey, string> = {
   agent: '#/agent',
@@ -114,6 +115,20 @@ const expenseZoom = ref(1);
 const expenseRotation = ref(0);
 const expenseImageIndex = ref(0);
 const weighKeyword = ref('');
+const weighSupplementVisible = ref(false);
+const weighSupplementForm = reactive({
+  loadingDate: '2026-06-30',
+  unloadingDate: '2026-06-30',
+  orderNo: '',
+  customer: '',
+  vehiclePlate: '',
+  driver: '',
+  goods: '',
+  loadingPlace: '',
+  loadingTonnage: 0,
+  unloadingPlace: '',
+  unloadingTonnage: 0
+});
 const weighEditId = ref('');
 const weighEditForm = reactive<Record<string, any>>({
   loadingDate: '',
@@ -240,6 +255,7 @@ const pageTitle: Record<PageKey, string> = {
 };
 
 const companyNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
+  { key: 'dashboard', label: '总车队看板', icon: DashboardOutlined },
   { key: 'projects', label: '项目车队', icon: ProjectOutlined }
 ];
 
@@ -447,6 +463,90 @@ const approvedExpenseRows = computed(() => [
   ...bulkExpenseRows.value.filter((item) => item.projectId === selectedProjectId.value)
 ]);
 const currentExpense = computed(() => expenseRows.value[reviewExpenseIndex.value] ?? expenseRows.value[0]);
+
+// 报账单：同一司机 + 同一车牌 + 同一提报时间视为微信里一次提报的整单
+interface ExpenseBatch {
+  key: string;
+  driver: string;
+  vehiclePlate: string;
+  projectId: string;
+  submittedAt: string;
+  message: string;
+  items: Expense[];
+  total: number;
+  pendingCount: number;
+  anomalyCount: number;
+  status: AuditStatus;
+}
+
+const expenseBatches = computed<ExpenseBatch[]>(() => {
+  const groups = new Map<string, Expense[]>();
+  for (const item of expenseRows.value) {
+    const key = `${item.driver}|${item.vehiclePlate}|${item.submittedAt}`;
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(item);
+    else groups.set(key, [item]);
+  }
+
+  return [...groups.entries()].map(([key, items]) => {
+    const pending = items.filter((item) => item.auditStatus === '待审核');
+    const doubtful = items.filter((item) => item.auditStatus === '有疑点');
+    // 整单状态：还有待审核则待审核，其次有疑点，全部驳回才算驳回，否则已通过
+    const status: AuditStatus = pending.length
+      ? '待审核'
+      : doubtful.length
+        ? '有疑点'
+        : items.every((item) => item.auditStatus === '已驳回')
+          ? '已驳回'
+          : '已通过';
+    return {
+      key,
+      driver: items[0].driver,
+      vehiclePlate: items[0].vehiclePlate,
+      projectId: items[0].projectId,
+      submittedAt: items[0].submittedAt,
+      // 首条 message 通常是整单报账原文，取最长的那条更完整
+      message: items.reduce((longest, item) => (item.message.length > longest.length ? item.message : longest), ''),
+      items,
+      total: items.reduce((sum, item) => sum + item.amount, 0),
+      pendingCount: pending.length,
+      anomalyCount: items.filter((item) => item.anomalies.length).length,
+      status
+    };
+  });
+});
+
+// 当前审核的报账单跟随 currentExpense，保证与列表跳转、Agent 定位等既有入口一致
+const currentExpenseBatchIndex = computed(() => {
+  const current = currentExpense.value;
+  if (!current) return 0;
+  const index = expenseBatches.value.findIndex((batch) => batch.items.some((item) => item.id === current.id));
+  return index >= 0 ? index : 0;
+});
+
+const currentExpenseBatch = computed(() => expenseBatches.value[currentExpenseBatchIndex.value] ?? expenseBatches.value[0]);
+
+// 费用项目分段切换：当前选中的事项
+const focusedExpenseId = ref('');
+// 群原始消息是否收起
+const wechatMessageCollapsed = ref(false);
+
+const focusedExpense = computed(() => {
+  const batch = currentExpenseBatch.value;
+  if (!batch) return currentExpense.value;
+  return batch.items.find((item) => item.id === focusedExpenseId.value) ?? batch.items[0];
+});
+
+// 整单公共信息：挂车号、司机电话从车辆档案带出，线路取报账原文
+const currentExpenseBatchVehicle = computed(() =>
+  vehicles.find((vehicle) => vehicle.plate === currentExpenseBatch.value?.vehiclePlate)
+);
+
+const currentExpenseBatchRoute = computed(() => {
+  const batch = currentExpenseBatch.value;
+  if (!batch) return '';
+  return batch.items.find((item) => item.route)?.route ?? '';
+});
 
 const totalStats = computed(() => {
   const revenue = pairedWeighRows.value.reduce((sum, item) => sum + item.taxableOutput, 0);
@@ -876,8 +976,11 @@ const pairedWeighRows = computed<PairedWeighRecord[]>(() => {
     })
     .filter((item): item is PairedWeighRecord => Boolean(item));
 
-  return applyWeighEdits([...imageDerivedRows, ...buildBulkPairedWeighRows()]);
+  return applyWeighEdits([...manualWeighRows.value, ...imageDerivedRows, ...buildBulkPairedWeighRows()]);
 });
+
+// 手动补录的磅单记录
+const manualWeighRows = ref<PairedWeighRecord[]>([]);
 
 // 磅单列表行编辑覆盖表（键为记录 id），应用后重算派生字段
 type WeighEditable = Pick<
@@ -1161,24 +1264,36 @@ const weighFieldGroups = computed<WeighReviewGroup[]>(() => {
   ];
 });
 
-const expenseFields = computed(() => {
-  const item = currentExpense.value;
+// 提报信息：整单公共信息，来自司机报账原文 + 车辆档案
+const expenseBatchFields = computed(() => {
+  const batch = currentExpenseBatch.value;
+  if (!batch) return [];
   return [
-    field('driver', '司机', item.driver),
-    field('vehiclePlate', '车牌号', item.vehiclePlate),
-    field('type', '报销类型', item.type),
-    field('item', '报销事项', item.item),
-    field('amount', '金额', item.amount),
-    field('occurredDate', '发生日期', item.occurredDate),
-    field('submittedAt', '提报时间', item.submittedAt),
+    field('vehiclePlate', '车牌号', batch.vehiclePlate),
+    field('driver', '司机', batch.driver),
+    field('driverPhone', '联系电话', currentExpenseBatchVehicle.value?.driverPhone ?? ''),
+    field('trailer', '挂车号', currentExpenseBatchVehicle.value?.trailer ?? ''),
+    field('route', '线路', currentExpenseBatchRoute.value)
+  ];
+});
+
+// 费用明细：随当前选中的费用项与凭证切换
+const expenseDetailFields = computed(() => {
+  const item = focusedExpense.value;
+  if (!item) return [];
+  return [
     field('payee', '付款对象', item.payee),
-    field('payStatus', '支付状态', item.payStatus)
+    field('payTime', '付款时间', item.payTime ?? ''),
+    field('payAccount', '付款账号', item.payAccount ?? ''),
+    field('feeCategory', '费用类型', item.feeCategory ?? ''),
+    field('amount', '金额', item.amount),
+    field('occurredDate', '发生日期', item.occurredDate)
   ];
 });
 
 const flatWeighFields = computed(() => weighFieldGroups.value.flatMap((group) => group.fields));
 const activeWeighField = computed(() => flatWeighFields.value.find((item) => item.key === activeFieldKey.value));
-const activeExpenseBox = computed(() => currentExpense.value.fieldBoxes.find((box) => box.key === activeExpenseFieldKey.value));
+const activeExpenseBox = computed(() => focusedExpense.value.fieldBoxes.find((box) => box.key === activeExpenseFieldKey.value));
 
 function field(key: string, label: string, value: string | number) {
   return { key, label, value };
@@ -1586,6 +1701,74 @@ function saveWeighEdit() {
   message.success('磅单已保存，含税产值与利润已重算');
 }
 
+// 补录磅单
+function openWeighSupplement() {
+  Object.assign(weighSupplementForm, {
+    loadingDate: '2026-06-30',
+    unloadingDate: '2026-06-30',
+    orderNo: '',
+    customer: currentProject.value.name,
+    vehiclePlate: '',
+    driver: '',
+    goods: '',
+    loadingPlace: '',
+    loadingTonnage: 0,
+    unloadingPlace: '',
+    unloadingTonnage: 0
+  });
+  weighSupplementVisible.value = true;
+}
+
+function saveWeighSupplement() {
+  if (!weighSupplementForm.vehiclePlate.trim() || !(Number(weighSupplementForm.unloadingTonnage) > 0)) {
+    message.warning('请填写车牌与卸货吨位');
+    return;
+  }
+  const projectId = selectedProjectId.value;
+  const loadingPlace = weighSupplementForm.loadingPlace.trim();
+  const unloadingPlace = weighSupplementForm.unloadingPlace.trim();
+  const routeKey = `${loadingPlace} → ${unloadingPlace}`;
+  const baseValues = baseValuesForProject(projectId, routeKey);
+  const unloadingTonnage = Number(weighSupplementForm.unloadingTonnage) || 0;
+  const loadingTonnage = Number(weighSupplementForm.loadingTonnage) || unloadingTonnage;
+  const taxableOutput = unloadingTonnage * baseValues.taxableUnitPrice;
+  const taxPoint = taxableOutput * baseValues.taxRate;
+  const profit = taxableOutput - baseValues.cargoInsurance - baseValues.driverSalary - taxPoint;
+  const id = `SUP-${projectId}-${Date.now()}`;
+  manualWeighRows.value = [
+    {
+      id,
+      projectId,
+      loadingDate: weighSupplementForm.loadingDate,
+      unloadingDate: weighSupplementForm.unloadingDate,
+      orderNo: weighSupplementForm.orderNo.trim() || id,
+      customer: weighSupplementForm.customer.trim() || currentProject.value.name,
+      vehiclePlate: weighSupplementForm.vehiclePlate.trim(),
+      arrivalVehiclePlate: weighSupplementForm.vehiclePlate.trim(),
+      driver: weighSupplementForm.driver.trim(),
+      goods: weighSupplementForm.goods.trim(),
+      loadingPlace,
+      loadingTonnage,
+      unloadingPlace,
+      unloadingTonnage,
+      taxableUnitPrice: baseValues.taxableUnitPrice,
+      cargoInsurance: baseValues.cargoInsurance,
+      taxRate: baseValues.taxRate,
+      driverSalary: baseValues.driverSalary,
+      taxableOutput,
+      taxPoint,
+      profit,
+      receivedFreight: taxableOutput,
+      collectionDate: weighSupplementForm.unloadingDate,
+      period: `${weighSupplementForm.unloadingDate.slice(0, 7).replace('-', '年')}月`,
+      sourceBillId: ''
+    },
+    ...manualWeighRows.value
+  ];
+  weighSupplementVisible.value = false;
+  message.success('磅单已补录，含税产值与利润已自动计算');
+}
+
 function goExpenseAudit(record?: Expense) {
   if (record) {
     reviewExpenseIndex.value = Math.max(0, expenseRows.value.findIndex((item) => item.id === record.id));
@@ -1601,6 +1784,9 @@ function goVehicle(vehicleId: string) {
   activePage.value = 'vehicleDetail';
 }
 
+// 修正记忆：记录本次审核中每个字段首次编辑前的原值，保存时 diff 沉淀
+const weighOriginalValues = new Map<string, { dimension: ReturnType<typeof dimensionForField>; from: string }>();
+
 function updateWeighValue(key: string, value: string) {
   const pair = currentWeighPair.value;
   const [sourceKey, rawKey] = key.includes('.') ? key.split('.') : ['', key];
@@ -1612,6 +1798,14 @@ function updateWeighValue(key: string, value: string) {
         : [];
 
   if (rawKey === 'route' || targets.length === 0) return;
+
+  // 首次编辑该字段时记住识别原值，供保存时生成修正记忆
+  const dimension = dimensionForField(rawKey);
+  const memoryKey = `${pair.id}|${key}`;
+  if (dimension && !weighOriginalValues.has(memoryKey)) {
+    const original = (targets[0] as unknown as Record<string, string | number>)[rawKey];
+    weighOriginalValues.set(memoryKey, { dimension, from: String(original ?? '') });
+  }
 
   targets.forEach((target) => {
     const record = target as unknown as Record<string, string | number>;
@@ -1705,17 +1899,120 @@ function onWeighInput(key: string, value: unknown) {
   updateWeighValue(key, String(value));
 }
 
-function updateExpenseValue(key: string, value: string) {
-  const record = currentExpense.value as unknown as Record<string, string | number>;
-  if (key === 'amount') {
-    record[key] = Number(value) || 0;
-    return;
-  }
-  record[key] = value;
+// 卡片内逐事项修正，写回该事项本身而不是当前聚焦项
+function onExpenseItemInput(item: Expense, key: string, value: unknown) {
+  const record = item as unknown as Record<string, string | number>;
+  record[key] = key === 'amount' ? Number(value) || 0 : String(value);
 }
 
-function onExpenseInput(key: string, value: unknown) {
-  updateExpenseValue(key, String(value));
+// 提报信息是整单公共字段：车牌/司机写回本单每一项，挂车与电话写回车辆档案，线路写回整单
+function onExpenseBatchInput(key: string, value: unknown) {
+  const batch = currentExpenseBatch.value;
+  if (!batch) return;
+  const text = String(value);
+  if (key === 'driverPhone' || key === 'trailer') {
+    const vehicle = currentExpenseBatchVehicle.value;
+    if (vehicle) vehicle[key] = text;
+    return;
+  }
+  batch.items.forEach((item) => {
+    (item as unknown as Record<string, string | number>)[key] = text;
+  });
+}
+
+function focusExpenseItem(item: Expense) {
+  focusedExpenseId.value = item.id;
+  expenseImageIndex.value = 0;
+  activeExpenseFieldKey.value = '';
+  // 聚焦即同步全局索引，保证付款明细、Agent 等既有入口读到的当前项一致
+  const index = expenseRows.value.findIndex((row) => row.id === item.id);
+  if (index >= 0) reviewExpenseIndex.value = index;
+}
+
+// 单个事项定审：整单里其它事项不受影响
+function markExpenseItem(item: Expense, status: AuditStatus) {
+  item.auditStatus = status;
+  message.success(`${item.type} ${money(item.amount)} 已标记为${status}`);
+  const batch = currentExpenseBatch.value;
+  if (!batch) return;
+  // 顺手聚焦到本单下一笔仍待审核的事项，减少来回点击
+  const nextPending = batch.items.find((row) => row.id !== item.id && row.auditStatus === '待审核');
+  if (nextPending) focusExpenseItem(nextPending);
+}
+
+function markExpenseItemRejected(item: Expense) {
+  Modal.confirm({
+    title: `确认作废「${item.type} ${money(item.amount)}」？`,
+    content: '作废后该笔报销事项不可恢复，整单其它事项不受影响。',
+    okText: '确认作废',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk() {
+      markExpenseItem(item, '已驳回');
+    }
+  });
+}
+
+// 整单批量：只推进仍待审核/有疑点的事项，已通过、已驳回的不回改
+function markExpenseBatch(status: AuditStatus) {
+  const batch = currentExpenseBatch.value;
+  if (!batch) return;
+  const targets = batch.items.filter((item) => item.auditStatus === '待审核' || item.auditStatus === '有疑点');
+  if (!targets.length) {
+    message.info('本单没有待处理的事项');
+    return;
+  }
+  const apply = () => {
+    targets.forEach((item) => {
+      item.auditStatus = status;
+    });
+    message.success(`${batch.driver} 本单 ${targets.length} 笔已标记为${status}（合计 ${money(targets.reduce((sum, item) => sum + item.amount, 0))}）`);
+    if (status === '已通过') nextExpenseBatch();
+  };
+
+  const flagged = targets.filter((item) => item.anomalies.length);
+  // 带异常的事项一次性通过风险较高，二次确认并列出异常
+  if (status === '已通过' && flagged.length) {
+    Modal.confirm({
+      title: `本单有 ${flagged.length} 笔带异常提示，仍要全部通过？`,
+      content: flagged.map((item) => `${item.type}：${item.anomalies.join('、')}`).join('\n'),
+      okText: '仍然全部通过',
+      cancelText: '逐笔核对',
+      onOk: apply
+    });
+    return;
+  }
+  apply();
+}
+
+function saveExpenseBatch() {
+  const batch = currentExpenseBatch.value;
+  if (!batch) return;
+  batch.items.forEach((item) => {
+    item.anomalies = item.anomalies.filter(Boolean);
+  });
+  message.success(`${batch.driver} 本单 ${batch.items.length} 笔修改已保存`);
+}
+
+function goToExpenseBatch(index: number) {
+  const batches = expenseBatches.value;
+  if (!batches.length) return;
+  const target = batches[(index + batches.length) % batches.length];
+  // 优先落在待审核事项上，否则落在首笔
+  const landing = target.items.find((item) => item.auditStatus === '待审核') ?? target.items[0];
+  focusExpenseItem(landing);
+}
+
+function previousExpenseBatch() {
+  goToExpenseBatch(currentExpenseBatchIndex.value - 1);
+}
+
+function nextExpenseBatch() {
+  goToExpenseBatch(currentExpenseBatchIndex.value + 1);
+}
+
+function jumpToExpenseBatch(index: number) {
+  goToExpenseBatch(index);
 }
 
 function previousWeigh() {
@@ -1730,16 +2027,11 @@ function nextWeigh() {
   activeFieldKey.value = '';
 }
 
-function previousExpense() {
-  reviewExpenseIndex.value = reviewExpenseIndex.value <= 0 ? expenseRows.value.length - 1 : reviewExpenseIndex.value - 1;
-  expenseImageIndex.value = 0;
-  activeExpenseFieldKey.value = '';
-}
-
-function nextExpense() {
-  reviewExpenseIndex.value = (reviewExpenseIndex.value + 1) % expenseRows.value.length;
-  expenseImageIndex.value = 0;
-  activeExpenseFieldKey.value = '';
+function jumpToWeighPair(index: number) {
+  const total = auditWeighPairs.value.length;
+  if (!total) return;
+  reviewWeighPairIndex.value = Math.min(Math.max(0, index), total - 1);
+  activeFieldKey.value = '';
 }
 
 function markWeigh(status: AuditStatus) {
@@ -1763,30 +2055,28 @@ function confirmRejectWeigh() {
   });
 }
 
-function markExpense(status: AuditStatus) {
-  currentExpense.value.auditStatus = status;
-  message.success(`报销 ${currentExpense.value.id} 已标记为${status}`);
-  if (status === '已通过') nextExpense();
-}
-
-// 作废报销单：确认后作废
-function confirmRejectExpense() {
-  Modal.confirm({
-    title: '确认作废此报销单？',
-    content: '作废后该报销单不可恢复。',
-    okText: '确认作废',
-    okType: 'danger',
-    cancelText: '取消',
-    onOk() {
-      markExpense('已驳回');
-    }
-  });
-}
-
 function saveWeigh() {
-  currentWeighPair.value.departure.anomalies = currentWeighPair.value.departure.anomalies.filter(Boolean);
-  currentWeighPair.value.arrival.anomalies = currentWeighPair.value.arrival.anomalies.filter(Boolean);
-  message.success('磅单组修改已保存');
+  const pair = currentWeighPair.value;
+  pair.departure.anomalies = pair.departure.anomalies.filter(Boolean);
+  pair.arrival.anomalies = pair.arrival.anomalies.filter(Boolean);
+
+  // 把本单的人工修正沉淀为字典记忆：原值 ≠ 现值 才记录
+  let memorized = 0;
+  weighOriginalValues.forEach((entry, memoryKey) => {
+    const [pairId, key] = memoryKey.split('|');
+    if (pairId !== pair.id || !entry.dimension) return;
+    const rawKey = key.includes('.') ? key.split('.')[1] : key;
+    const sourceKey = key.includes('.') ? key.split('.')[0] : 'departure';
+    const holder = (sourceKey === 'arrival' ? pair.arrival : pair.departure) as unknown as Record<string, string | number>;
+    const current = String(holder[rawKey] ?? '');
+    if (current && current !== entry.from) {
+      recordCorrection(entry.dimension, entry.from, current, pair.departure.date);
+      memorized += 1;
+    }
+    weighOriginalValues.delete(memoryKey);
+  });
+
+  message.success(memorized ? `磅单组修改已保存，${memorized} 条修正已沉淀到企业字典待确认` : '磅单组修改已保存');
 }
 
 function markExpensePaid(record: Expense) {
@@ -1837,11 +2127,6 @@ function saveExpenseEdit() {
   expenseEditId.value = '';
   expenseEditRef.value = null;
   message.success('付款明细已保存');
-}
-
-function saveExpense() {
-  currentExpense.value.anomalies = currentExpense.value.anomalies.filter(Boolean);
-  message.success('报销修改已保存');
 }
 
 function selectAgentModel(option: AgentModelOption) {
@@ -2186,9 +2471,15 @@ function buildAgentReply(content: string, options?: { deferNavigation?: boolean 
   };
 }
 
-function nextExpenseImage() {
-  expenseImageIndex.value = (expenseImageIndex.value + 1) % currentExpense.value.images.length;
-}
+// 列表「原图」、Agent 定位、项目切换等入口都以 reviewExpenseIndex 落点，这里同步选中对应费用项
+watch(
+  () => currentExpense.value?.id,
+  (id) => {
+    if (!id) return;
+    focusedExpenseId.value = id;
+  },
+  { immediate: true }
+);
 
 watch(activePage, (page) => {
   syncBrowserHash(page);
@@ -2467,6 +2758,26 @@ onBeforeUnmount(() => {
               <span>当前 {{ reviewWeighPairIndex + 1 }} / {{ auditWeighPairs.length }}</span>
               <strong>{{ currentWeighPair.vehiclePlate }} · {{ currentWeighPair.goods }} · 装 {{ ton(currentWeighPair.departure.net) }} / 卸 {{ ton(currentWeighPair.arrival.net) }}</strong>
             </div>
+            <div class="review-jump">
+              <span>跳转至</span>
+              <a-select
+                :value="reviewWeighPairIndex"
+                size="small"
+                show-search
+                option-filter-prop="label"
+                class="review-jump-select"
+                @update:value="jumpToWeighPair"
+              >
+                <a-select-option
+                  v-for="(pair, index) in auditWeighPairs"
+                  :key="pair.id"
+                  :value="index"
+                  :label="`${pair.vehiclePlate} ${pair.goods} ${pair.driver} ${pair.route} ${pair.status}`"
+                >
+                  {{ index + 1 }}. {{ pair.vehiclePlate }} · {{ pair.goods }} · {{ pair.status }}
+                </a-select-option>
+              </a-select>
+            </div>
             <div class="summary-tags">
               <a-tag :color="statusColor(currentWeighPair.status)">{{ currentWeighPair.status }}</a-tag>
               <a-tag v-for="item in currentWeighPair.anomalies" :key="item" color="red">{{ item }}</a-tag>
@@ -2587,7 +2898,10 @@ onBeforeUnmount(() => {
             <a-input v-model:value="weighKeyword" placeholder="搜索车牌号、司机、货物、客户、地点、单号" allow-clear>
               <template #prefix><SearchOutlined /></template>
             </a-input>
-            <a-button><DownloadOutlined />导出磅单汇总表</a-button>
+            <div class="filter-actions">
+              <a-button @click="openWeighSupplement"><PlusOutlined />补录磅单</a-button>
+              <a-button><DownloadOutlined />导出磅单汇总表</a-button>
+            </div>
           </div>
           <a-table
             size="small"
@@ -2615,77 +2929,191 @@ onBeforeUnmount(() => {
           <div class="review-back-bar">
             <a-button @click="navigate('expenseList')"><LeftOutlined />返回付款明细</a-button>
           </div>
-          <div class="review-summary">
+          <div class="review-summary expense-review-summary">
             <div>
-              <span>当前 {{ reviewExpenseIndex + 1 }} / {{ expenseRows.length }}</span>
-              <strong>{{ currentExpense.driver }} · {{ currentExpense.vehiclePlate }} · {{ currentExpense.type }} {{ money(currentExpense.amount) }}</strong>
+              <span class="progress-line">当前进度 第 {{ currentExpenseBatchIndex + 1 }} 单 / 共 {{ expenseBatches.length }} 单 · 本单 {{ currentExpenseBatch.items.length }} 项</span>
+              <strong>{{ currentExpenseBatch.vehiclePlate }} · {{ currentExpenseBatch.driver }} · {{ money(currentExpenseBatch.total) }}</strong>
+            </div>
+            <div class="review-jump">
+              <span>跳转至</span>
+              <a-select
+                :value="currentExpenseBatchIndex"
+                size="small"
+                show-search
+                option-filter-prop="label"
+                class="review-jump-select"
+                @update:value="jumpToExpenseBatch"
+              >
+                <a-select-option
+                  v-for="(batch, index) in expenseBatches"
+                  :key="batch.key"
+                  :value="index"
+                  :label="`${batch.driver} ${batch.vehiclePlate} ${batch.submittedAt} ${batch.status}`"
+                >
+                  {{ index + 1 }}. {{ batch.driver }} · {{ batch.items.length }}项 {{ money(batch.total) }} · {{ batch.status }}
+                </a-select-option>
+              </a-select>
             </div>
             <div class="summary-tags">
-              <a-tag :color="statusColor(currentExpense.auditStatus)">{{ currentExpense.auditStatus }}</a-tag>
-              <a-tag v-for="item in currentExpense.anomalies" :key="item" color="red">{{ item }}</a-tag>
+              <a-tag :color="statusColor(currentExpenseBatch.status)">{{ currentExpenseBatch.status }}</a-tag>
+              <a-tag :color="statusColor(focusedExpense.payStatus)">{{ focusedExpense.payStatus }}</a-tag>
+              <a-tag v-if="currentExpenseBatch.anomalyCount" color="red">异常 {{ currentExpenseBatch.anomalyCount }} 项</a-tag>
             </div>
           </div>
 
           <div class="review-grid">
-            <div class="document-pane">
-              <div class="image-toolbar">
-                <a-button size="small" @click="expenseZoom = Math.max(0.7, expenseZoom - 0.1)"><ZoomOutOutlined /></a-button>
-                <a-button size="small" @click="expenseZoom = Math.min(1.6, expenseZoom + 0.1)"><ZoomInOutlined /></a-button>
-                <a-button size="small" @click="expenseRotation = (expenseRotation + 90) % 360"><RotateRightOutlined /></a-button>
-                <a-button size="small" @click="nextExpenseImage">切换凭证 {{ expenseImageIndex + 1 }}/{{ currentExpense.images.length }}</a-button>
+            <div class="document-pane expense-document-pane">
+              <div class="wechat-card">
+                <div class="wechat-card-head">
+                  <span>群原始消息</span>
+                  <a class="wechat-toggle" @click="wechatMessageCollapsed = !wechatMessageCollapsed">
+                    {{ wechatMessageCollapsed ? '展开原文' : '收起原文' }}
+                  </a>
+                </div>
+                <template v-if="!wechatMessageCollapsed">
+                  <div class="wechat-meta">司机 · {{ currentExpenseBatch.submittedAt }}</div>
+                  <p @mouseenter="activeExpenseFieldKey = 'item'" @mouseleave="activeExpenseFieldKey = ''">{{ currentExpenseBatch.message }}</p>
+                  <div class="wechat-summary">合计：{{ money(currentExpenseBatch.total) }}</div>
+                </template>
               </div>
-              <div class="wechat-card" @mouseenter="activeExpenseFieldKey = 'item'" @mouseleave="activeExpenseFieldKey = ''">
-                <span>微信群消息</span>
-                <p>{{ currentExpense.message }}</p>
+
+              <div class="voucher-bar">
+                <span>当前费用项：<b>{{ focusedExpense.item }}</b></span>
+                <a-tag color="blue">关联凭证 {{ focusedExpense.images.length }} 张</a-tag>
               </div>
+
+              <div class="voucher-tabs">
+                <button
+                  v-for="(image, index) in focusedExpense.images"
+                  :key="image"
+                  class="voucher-tab"
+                  :class="{ active: expenseImageIndex === index }"
+                  @click="expenseImageIndex = index"
+                >
+                  附件 {{ index + 1 }}
+                </button>
+              </div>
+
               <div class="image-stage expense-stage">
-                <img :src="currentExpense.images[expenseImageIndex]" :style="{ transform: `scale(${expenseZoom}) rotate(${expenseRotation}deg)` }" alt="报销凭证" />
+                <img :src="focusedExpense.images[expenseImageIndex]" :style="{ transform: `scale(${expenseZoom}) rotate(${expenseRotation}deg)` }" alt="报销凭证" />
                 <div v-if="activeExpenseBox" class="field-highlight expense" :style="boxStyle(activeExpenseBox)">
                   {{ activeExpenseBox.label }}
                 </div>
               </div>
+
+              <div class="image-toolbar image-toolbar-bottom">
+                <span>{{ Math.round(expenseZoom * 100) }}%</span>
+                <a-button size="small" @click="expenseZoom = Math.max(0.7, expenseZoom - 0.1)"><ZoomOutOutlined /></a-button>
+                <a-button size="small" @click="expenseZoom = Math.min(1.6, expenseZoom + 0.1)"><ZoomInOutlined /></a-button>
+                <a-button size="small" @click="expenseRotation = (expenseRotation + 90) % 360"><RotateRightOutlined /></a-button>
+              </div>
             </div>
 
-            <div class="form-pane">
+            <div class="form-pane expense-form-pane">
               <div class="form-head">
                 <div>
                   <strong>识别结果</strong>
-                  <span>金额、类型、付款对象可直接修正，审核后进入付款明细</span>
+                  <span>鼠标悬浮右侧字段会自动定位并放大凭证对应区域，可直接修正识别结果。</span>
                 </div>
-                <a-tag color="cyan">{{ currentExpense.submittedAt }}</a-tag>
+                <a-tag color="cyan">{{ currentExpenseBatch.submittedAt }}</a-tag>
               </div>
-              <div class="field-table compact">
-                <div class="field-row header">
-                  <span>字段</span>
-                  <span>识别值 / 可编辑</span>
-                  <span>异常</span>
+
+              <div class="expense-form-scroll">
+                <div class="expense-section">
+                  <div class="expense-section-head">
+                    <strong>提报信息</strong>
+                    <span>整单公共信息，本单 {{ currentExpenseBatch.items.length }} 项共用</span>
+                  </div>
+                  <div class="field-table compact">
+                    <div
+                      v-for="row in expenseBatchFields"
+                      :key="row.key"
+                      class="field-row"
+                      :class="{ active: activeExpenseFieldKey === row.key }"
+                      @pointerenter="activeExpenseFieldKey = row.key"
+                      @mouseover="activeExpenseFieldKey = row.key"
+                      @focusin="activeExpenseFieldKey = row.key"
+                      @mouseenter="activeExpenseFieldKey = row.key"
+                      @mouseleave="activeExpenseFieldKey = ''"
+                    >
+                      <span>{{ row.label }}</span>
+                      <a-input :value="String(row.value)" size="small" @update:value="onExpenseBatchInput(row.key, $event)" />
+                    </div>
+                  </div>
                 </div>
-                <div
-                  v-for="item in expenseFields"
-                  :key="item.key"
-                  class="field-row"
-                  :class="{ active: activeExpenseFieldKey === item.key }"
-                  @pointerenter="activeExpenseFieldKey = item.key"
-                  @mouseover="activeExpenseFieldKey = item.key"
-                  @focusin="activeExpenseFieldKey = item.key"
-                  @mouseenter="activeExpenseFieldKey = item.key"
-                  @mouseleave="activeExpenseFieldKey = ''"
-                >
-                  <span>{{ item.label }}</span>
-                  <a-input :value="String(item.value)" size="small" @update:value="onExpenseInput(item.key, $event)" />
-                  <span class="field-issue">{{ currentExpense.anomalies.find((issue) => issue.includes(item.label.slice(0, 2))) || '-' }}</span>
+
+                <div class="expense-section">
+                  <div class="expense-section-head">
+                    <strong>费用项目</strong>
+                    <span>点击费用项即可切换对应表单和凭证，无需下拉选择。</span>
+                  </div>
+                  <div class="fee-item-switch">
+                    <button
+                      v-for="(item, index) in currentExpenseBatch.items"
+                      :key="item.id"
+                      class="fee-item-chip"
+                      :class="[{ active: focusedExpense.id === item.id }, `status-${item.auditStatus}`]"
+                      @click="focusExpenseItem(item)"
+                    >
+                      <i class="fee-item-index">{{ index + 1 }}</i>
+                      <span class="fee-item-label">{{ item.item }}</span>
+                      <b class="fee-item-amount">{{ money(item.amount) }}</b>
+                      <em v-if="item.anomalies.length" class="fee-item-flag">!</em>
+                    </button>
+                  </div>
                 </div>
+
+                <div class="expense-section">
+                  <div class="expense-section-head">
+                    <strong>费用明细</strong>
+                    <span>切换左侧附件后字段会随当前凭证更新；未识别或识别有误时可直接手工修改。</span>
+                  </div>
+                  <div v-if="focusedExpense.anomalies.length" class="expense-item-anomalies">
+                    <WarningOutlined />
+                    <span v-for="issue in focusedExpense.anomalies" :key="issue">{{ issue }}</span>
+                  </div>
+                  <div class="field-table compact">
+                    <div
+                      v-for="row in expenseDetailFields"
+                      :key="row.key"
+                      class="field-row"
+                      :class="{ active: activeExpenseFieldKey === row.key }"
+                      @pointerenter="activeExpenseFieldKey = row.key"
+                      @mouseover="activeExpenseFieldKey = row.key"
+                      @focusin="activeExpenseFieldKey = row.key"
+                      @mouseenter="activeExpenseFieldKey = row.key"
+                      @mouseleave="activeExpenseFieldKey = ''"
+                    >
+                      <span>{{ row.label }}</span>
+                      <a-input :value="String(row.value)" size="small" @update:value="onExpenseItemInput(focusedExpense, row.key, $event)" />
+                      <span class="field-issue">{{ focusedExpense.anomalies.find((issue) => issue.includes(row.label.slice(0, 2))) || '-' }}</span>
+                    </div>
+                  </div>
+                  <div class="expense-item-actions">
+                    <a-button size="small" type="primary" @click="markExpenseItem(focusedExpense, '已通过')"><CheckOutlined />本项通过</a-button>
+                    <a-button size="small" @click="markExpenseItem(focusedExpense, '有疑点')"><WarningOutlined />标记疑点</a-button>
+                    <a-button size="small" danger @click="markExpenseItemRejected(focusedExpense)"><CloseOutlined />作废本项</a-button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="expense-batch-total">
+                <span>本单合计</span>
+                <b>{{ money(currentExpenseBatch.total) }}</b>
+                <span>{{ currentExpenseBatch.items.length }} 项 · 待审核 {{ currentExpenseBatch.pendingCount }} 项</span>
               </div>
             </div>
           </div>
 
           <div class="sticky-actions">
-            <a-button @click="previousExpense"><LeftOutlined />上一笔</a-button>
-            <a-button @click="nextExpense">下一笔<RightOutlined /></a-button>
-            <a-button @click="saveExpense">保存修改</a-button>
-            <a-button danger @click="confirmRejectExpense"><CloseOutlined />作废</a-button>
-            <a-button @click="markExpense('有疑点')"><WarningOutlined />标记疑点</a-button>
-            <a-button type="primary" @click="markExpense('已通过')"><CheckOutlined />通过并下一笔</a-button>
+            <a-button @click="previousExpenseBatch"><LeftOutlined />上一单</a-button>
+            <a-button @click="nextExpenseBatch">下一单<RightOutlined /></a-button>
+            <a-button @click="saveExpenseBatch">保存修改</a-button>
+            <a-button danger @click="markExpenseBatch('已驳回')"><CloseOutlined />整单作废</a-button>
+            <a-button @click="markExpenseBatch('有疑点')"><WarningOutlined />整单标记疑点</a-button>
+            <a-button type="primary" @click="markExpenseBatch('已通过')">
+              <CheckOutlined />全部通过（{{ currentExpenseBatch.pendingCount || currentExpenseBatch.items.length }} 项）并下一单
+            </a-button>
           </div>
         </section>
 
@@ -2763,6 +3191,98 @@ onBeforeUnmount(() => {
         <ChargingDetailPage v-else-if="activePage === 'chargingDetail'" />
         <MaintenanceDetailPage v-else-if="activePage === 'maintenanceDetail'" />
         <TireExpensePage v-else-if="activePage === 'tireExpense'" />
+
+        <section v-else-if="activePage === 'dashboard'" class="content dashboard-screen">
+          <div class="metric-grid four">
+            <div class="metric-card"><span>总车辆数</span><strong>{{ totalStats.vehicles }}</strong></div>
+            <div class="metric-card"><span>运营车辆数</span><strong>{{ totalStats.running }}</strong></div>
+            <div class="metric-card"><span>本月总运费</span><strong>{{ money(totalStats.revenue) }}</strong></div>
+            <div class="metric-card"><span>本月总成本</span><strong>{{ money(totalStats.cost) }}</strong></div>
+            <div class="metric-card" :class="{ danger: totalStats.profit < 0 }"><span>本月毛利</span><strong>{{ money(totalStats.profit) }}</strong></div>
+            <div class="metric-card"><span>平均单车利润</span><strong>{{ money(totalStats.profit / totalStats.vehicles) }}</strong></div>
+            <div class="metric-card orange"><span>本月车次</span><strong>{{ totalStats.monthTrips }}</strong></div>
+            <div class="metric-card warning"><span>本月报销费用</span><strong>{{ money(totalStats.monthExpense) }}</strong></div>
+          </div>
+          <div class="dashboard-layout">
+            <div class="chart-card trend-card">
+              <div class="chart-card-head">
+                <div>
+                  <h3>项目月利润趋势</h3>
+                  <span>{{ dashboardTrendProject.name }} / {{ dashboardMonthOptions.find((item) => item.value === dashboardTrendMonth)?.label }} / 总利润 {{ money(selectedProjectMonthlyProfit) }}</span>
+                </div>
+                <div class="dashboard-trend-controls">
+                  <a-select v-model:value="dashboardTrendProjectId" class="dashboard-project-select">
+                    <a-select-option v-for="project in projectRows" :key="project.id" :value="project.id">{{ project.name }}</a-select-option>
+                  </a-select>
+                  <a-select v-model:value="dashboardTrendMonth" class="dashboard-month-select">
+                    <a-select-option v-for="month in dashboardMonthOptions" :key="month.value" :value="month.value">{{ month.label }}</a-select-option>
+                  </a-select>
+                </div>
+              </div>
+              <div class="trend-chart monthly-trend-chart">
+                <div v-for="day in projectMonthlyProfitTrend" :key="day.day" class="trend-col monthly">
+                  <div class="bar-wrap">
+                    <b>{{ money(day.profit) }}</b>
+                    <div class="bar" :class="{ negative: day.profit < 0 }" :style="{ height: `${Math.max(8, (Math.abs(day.profit) / maxProjectTrendProfit) * 150)}px` }"></div>
+                  </div>
+                  <span>{{ day.day }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="dashboard-analysis-grid">
+              <div class="chart-card vehicle-rank-card">
+                <div class="chart-card-head">
+                  <h3>本月车辆利润排名</h3>
+                  <span>{{ vehicleRank.length }} 辆</span>
+                </div>
+                <div class="rank-list">
+                  <div v-for="vehicle in vehicleRank" :key="vehicle.id" class="rank-line vehicle-rank-line" @click="goVehicle(vehicle.id)">
+                    <div class="rank-meta">
+                      <span>{{ vehicle.plate }}</span>
+                      <em>{{ projectName(vehicle.projectId) }} · {{ vehicle.driver }}</em>
+                    </div>
+                    <div class="rank-track"><i :class="{ negative: vehicle.profit < 0 }" :style="{ width: `${Math.max(6, (Math.abs(vehicle.profit) / maxVehicleProfit) * 100)}%` }"></i></div>
+                    <b :class="{ danger: vehicle.profit < 0 }">{{ money(vehicle.profit) }}</b>
+                  </div>
+                </div>
+              </div>
+
+              <div class="dashboard-secondary-grid">
+                <div class="chart-card">
+                  <h3>项目利润对比</h3>
+                  <div v-for="project in projectProfitComparison" :key="project.name" class="summary-line">
+                    <span>{{ project.name }}</span>
+                    <b :class="{ danger: project.profit < 0 }">{{ money(project.profit) }}</b>
+                  </div>
+                </div>
+                <div class="chart-card">
+                  <h3>异常单据分布</h3>
+                  <div class="issue-grid">
+                    <div><strong>{{ weighRows.filter((item) => item.anomalies.includes('缺少到货单')).length }}</strong><span>缺少到货单</span></div>
+                    <div><strong>{{ weighRows.filter((item) => item.anomalies.includes('疑似重复单')).length }}</strong><span>重复磅单</span></div>
+                    <div><strong>{{ expenseRows.filter((item) => item.anomalies.includes('重复报销')).length }}</strong><span>重复报销</span></div>
+                    <div><strong>{{ expenseRows.filter((item) => item.anomalies.includes('超预算')).length }}</strong><span>超预算</span></div>
+                  </div>
+                </div>
+                <div class="chart-card">
+                  <h3>按司机费用排名</h3>
+                  <div v-for="driver in ['何明军', '罗明', '刘启', '李进', '王成']" :key="driver" class="summary-line">
+                    <span>{{ driver }}</span>
+                    <b>{{ money(expenseRows.filter((item) => item.driver === driver).reduce((sum, item) => sum + item.amount, 0)) }}</b>
+                  </div>
+                </div>
+                <div class="chart-card">
+                  <h3>费用类型占比</h3>
+                  <div class="donut large"></div>
+                  <div class="legend-row">
+                    <span>油费</span><span>维修</span><span>路费</span><span>杂费</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <section v-else-if="activePage === 'vehicleDetail'" class="content vehicle-screen">
           <div class="vehicle-head">
@@ -3183,8 +3703,19 @@ onBeforeUnmount(() => {
       >
         <template v-if="activePage === 'expenseList'">
           <div class="right-card">
-            <span class="eyebrow">付款结构</span>
+            <span class="eyebrow">实时统计</span>
             <h2>{{ currentProject.name }}</h2>
+            <div class="stat-list">
+              <div><span>待审核磅单</span><strong>{{ projectStats.pendingWeigh }}</strong></div>
+              <div><span>待审核报销</span><strong>{{ projectStats.pendingExpense }}</strong></div>
+              <div><span>总运费</span><strong>{{ money(projectStats.revenue) }}</strong></div>
+              <div><span>总成本</span><strong>{{ money(projectStats.cost) }}</strong></div>
+              <div><span>毛利</span><strong :class="{ danger: projectStats.profit < 0 }">{{ money(projectStats.profit) }}</strong></div>
+              <div><span>异常单据</span><strong class="danger">{{ projectStats.issues }}</strong></div>
+            </div>
+          </div>
+          <div class="right-card">
+            <span class="eyebrow">付款结构</span>
             <div class="donut" :style="{ background: `conic-gradient(#08090C 0 30%, #F77113 30% 54%, #FB892A 54% 76%, #686BA6 76% 100%)` }"></div>
             <div v-for="item in expenseTypeSummary" :key="item.type" class="summary-line">
               <span>{{ item.type }}</span>
@@ -3246,6 +3777,23 @@ onBeforeUnmount(() => {
         </template>
       </aside>
     </div>
+
+    <a-modal v-model:open="weighSupplementVisible" title="补录磅单" width="640px" ok-text="补录" cancel-text="取消" @ok="saveWeighSupplement">
+      <div class="weigh-edit-form">
+        <label><span>装货日期</span><a-input v-model:value="weighSupplementForm.loadingDate" /></label>
+        <label><span>卸货日期</span><a-input v-model:value="weighSupplementForm.unloadingDate" /></label>
+        <label><span>单号</span><a-input v-model:value="weighSupplementForm.orderNo" placeholder="留空自动生成" /></label>
+        <label><span>客户</span><a-input v-model:value="weighSupplementForm.customer" /></label>
+        <label><span>车牌*</span><a-input v-model:value="weighSupplementForm.vehiclePlate" /></label>
+        <label><span>司机</span><a-input v-model:value="weighSupplementForm.driver" /></label>
+        <label><span>装货名称</span><a-input v-model:value="weighSupplementForm.goods" /></label>
+        <label><span>装货地点</span><a-input v-model:value="weighSupplementForm.loadingPlace" /></label>
+        <label><span>装货吨位</span><a-input-number v-model:value="weighSupplementForm.loadingTonnage" :min="0" :precision="2" style="width:100%" /></label>
+        <label><span>卸货地点</span><a-input v-model:value="weighSupplementForm.unloadingPlace" /></label>
+        <label><span>卸货吨位*</span><a-input-number v-model:value="weighSupplementForm.unloadingTonnage" :min="0" :precision="2" style="width:100%" /></label>
+      </div>
+      <p class="weigh-edit-tip">补录后按当前项目「装货地点 → 卸货地点」线路单价自动计算含税产值、税点与利润。</p>
+    </a-modal>
 
     <a-modal v-model:open="baseValuesModalVisible" title="按线路配置基本数值" width="520px" ok-text="保存" cancel-text="取消" @ok="saveBaseValues">
       <div class="base-values-modal">

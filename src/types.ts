@@ -26,6 +26,7 @@ export interface Vehicle {
   plate: string;
   trailer?: string;
   driver: string;
+  driverPhone?: string;
   owner: string;
   projectId: string;
   status: '运营中' | '待检修' | '停运';
@@ -78,6 +79,12 @@ export interface Expense {
   confidence: number;
   message: string;
   fieldBoxes: FieldBox[];
+  // 司机报账原文里的实跑线路，整单公共信息
+  route?: string;
+  // 费用明细：来自支付凭证的识别结果
+  payTime?: string;
+  payAccount?: string;
+  feeCategory?: string;
 }
 
 export interface AgentMessage {
