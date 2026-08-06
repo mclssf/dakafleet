@@ -47,6 +47,7 @@ import {
 } from './data';
 import type { AgentMessage, AuditStatus, Expense, FieldBox, PageKey, Project, WeighBill } from './types';
 import { dimensionForField, recordCorrection } from './dictMemory';
+import { addProjectRoute, matchProjectRoute, projectRoutes, removeProjectRoute } from './projectRoutes';
 
 const pageHashMap: Record<PageKey, string> = {
   agent: '#/agent',
@@ -106,6 +107,8 @@ const weighRows = ref<WeighBill[]>(weighBills.map((item) => ({ ...item, anomalie
 const expenseRows = ref<Expense[]>(reimbursements.map((item) => ({ ...item, anomalies: [...item.anomalies], images: [...item.images] })));
 const bulkExpenseRows = ref<Expense[]>(buildBulkExpenseRows());
 const reviewWeighPairIndex = ref(0);
+// 审核页人工指定的线路：pairId → 标准线路名，优先级高于自动匹配
+const weighRouteOverrides = ref<Record<string, string>>({});
 const reviewExpenseIndex = ref(Math.max(0, reimbursements.findIndex((item) => item.auditStatus === '待审核')));
 const activeFieldKey = ref('');
 const activeExpenseFieldKey = ref('');
@@ -153,6 +156,14 @@ const driverSummaryExpanded = ref(true);
 const projectMenuExpanded = ref(true);
 const agentRightPanelVisible = ref(true);
 const baseValuesModalVisible = ref(false);
+// 项目线路管理：客户自行配置线路及发/收货单位别名
+const routeManageVisible = ref(false);
+const routeManageProjectId = ref('');
+const routeManageForm = reactive({
+  name: '',
+  shipperAliasesText: '',
+  receiverAliasesText: ''
+});
 const dashboardTrendProjectId = ref(projectRows.value[0].id);
 const dashboardTrendMonth = ref('2026-06');
 const todayDate = '2026-06-30';
@@ -701,6 +712,9 @@ interface PairedWeighRecord {
   collectionDate: string;
   period: string;
   sourceBillId: string;
+  // 计价用线路 key：命中项目线路映射时为标准线路名，否则回退「装货地 → 卸货地」
+  routeKey: string;
+  routeMatched: boolean;
 }
 
 type WeighSource = 'departure' | 'arrival';
@@ -716,6 +730,8 @@ interface WeighAuditPair {
   driver: string;
   goods: string;
   route: string;
+  // 线路映射结果：matched=按发/收货单位双端命中项目线路，回填标准线路名
+  routeMatched: boolean;
 }
 
 interface WeighReviewField {
@@ -913,7 +929,9 @@ function buildBulkPairedWeighRows(): PairedWeighRecord[] {
         receivedFreight: taxableOutput,
         collectionDate: unloadingDate,
         period: '2026年06月',
-        sourceBillId
+        sourceBillId,
+        routeKey,
+        routeMatched: false
       };
     });
   });
@@ -938,7 +956,10 @@ const pairedWeighRows = computed<PairedWeighRecord[]>(() => {
       const routeParts = departure.remark.includes('-') ? departure.remark.split('-') : [];
       const loadingPlace = routeParts[0] || departure.shipper;
       const unloadingPlace = routeParts[1] || arrival.receiver;
-      const routeKey = `${loadingPlace} → ${unloadingPlace}`;
+      // 计价 key 优先级与审核页一致：人工指定 > 线路映射 > 地点拼接
+      const override = weighRouteOverrides.value[`${departure.id}-${arrival.id}`];
+      const matchedRoute = matchProjectRoute(departure.projectId, departure.shipper, arrival.receiver);
+      const routeKey = override || (matchedRoute ? matchedRoute.name : `${loadingPlace} → ${unloadingPlace}`);
       const baseValues = baseValuesForProject(departure.projectId, routeKey);
       const taxableOutput = arrival.net * baseValues.taxableUnitPrice;
       const taxPoint = taxableOutput * baseValues.taxRate;
@@ -971,7 +992,9 @@ const pairedWeighRows = computed<PairedWeighRecord[]>(() => {
         period: `${arrival.date.slice(0, 7)}`
           .replace('-', '年')
           .concat('月'),
-        sourceBillId: departure.id
+        sourceBillId: departure.id,
+        routeKey,
+        routeMatched: Boolean(override || matchedRoute)
       };
     })
     .filter((item): item is PairedWeighRecord => Boolean(item));
@@ -1031,8 +1054,7 @@ const currentWeighPair = computed(() => auditWeighPairs.value[reviewWeighPairInd
 const filteredPairedWeighRows = computed(() =>
   pairedWeighRows.value.filter((item) => {
     const keyword = weighKeyword.value.trim();
-    const routeKey = `${item.loadingPlace} → ${item.unloadingPlace}`;
-    const routeMatched = weighRouteFilter.value === '全部线路' || weighRouteFilter.value === routeKey;
+    const routeMatched = weighRouteFilter.value === '全部线路' || weighRouteFilter.value === item.routeKey;
     const dateMatched = weighDateRange.value.length !== 2 || (item.unloadingDate >= weighDateRange.value[0] && item.unloadingDate <= weighDateRange.value[1]);
     const keywordMatched =
       !keyword ||
@@ -1046,8 +1068,14 @@ const weighRouteOptions = computed(() => {
   pairedWeighRows.value
     .filter((item) => item.projectId === selectedProjectId.value)
     .forEach((item) => {
-      const routeKey = `${item.loadingPlace} → ${item.unloadingPlace}`;
-      map.set(routeKey, (map.get(routeKey) ?? 0) + 1);
+      // routeKey 已优先取项目线路映射的标准名，别名磅单会聚到同一条线路下
+      map.set(item.routeKey, (map.get(item.routeKey) ?? 0) + 1);
+    });
+  // 已配置但当前没有磅单的线路也要能选（先配线路后跑车的场景）
+  projectRoutes.value
+    .filter((route) => route.projectId === selectedProjectId.value && route.enabled)
+    .forEach((route) => {
+      if (!map.has(route.name)) map.set(route.name, 0);
     });
   return [...map.entries()].map(([route, count]) => ({ label: route, value: route, count }));
 });
@@ -1321,9 +1349,15 @@ function baseValuesForProject(projectId: string, routeKey?: string): WeighBaseVa
 function buildWeighAuditPair(departure: WeighBill, arrival: WeighBill): WeighAuditPair {
   const anomalies = [...new Set([...departure.anomalies, ...arrival.anomalies])];
   const status = pairAuditStatus(departure, arrival);
+  const pairId = `${departure.id}-${arrival.id}`;
+  // 线路取值优先级：审核员手工指定 > 项目线路映射（发/收货双端命中） > 备注/地点拼接
+  const override = weighRouteOverrides.value[pairId];
+  const matched = matchProjectRoute(departure.projectId, departure.shipper, arrival.receiver);
   const routeParts = departure.remark.includes('-') ? departure.remark.split('-') : [];
+  const resolved = override || (matched ? matched.name : '');
+  if (!resolved && !anomalies.includes('线路未匹配')) anomalies.push('线路未匹配');
   return {
-    id: `${departure.id}-${arrival.id}`,
+    id: pairId,
     projectId: departure.projectId,
     departure,
     arrival,
@@ -1332,7 +1366,8 @@ function buildWeighAuditPair(departure: WeighBill, arrival: WeighBill): WeighAud
     vehiclePlate: departure.vehiclePlate === arrival.vehiclePlate ? departure.vehiclePlate : `${departure.vehiclePlate} / ${arrival.vehiclePlate}`,
     driver: departure.driver,
     goods: departure.goods,
-    route: `${routeParts[0] || departure.shipper} → ${routeParts[1] || arrival.receiver}`
+    route: resolved || `${routeParts[0] || departure.shipper} → ${routeParts[1] || arrival.receiver}`,
+    routeMatched: Boolean(resolved)
   };
 }
 
@@ -1727,7 +1762,9 @@ function saveWeighSupplement() {
   const projectId = selectedProjectId.value;
   const loadingPlace = weighSupplementForm.loadingPlace.trim();
   const unloadingPlace = weighSupplementForm.unloadingPlace.trim();
-  const routeKey = `${loadingPlace} → ${unloadingPlace}`;
+  // 补录同样走项目线路映射：填的地点命中别名则按标准线路计价
+  const matchedRoute = matchProjectRoute(projectId, loadingPlace, unloadingPlace);
+  const routeKey = matchedRoute ? matchedRoute.name : `${loadingPlace} → ${unloadingPlace}`;
   const baseValues = baseValuesForProject(projectId, routeKey);
   const unloadingTonnage = Number(weighSupplementForm.unloadingTonnage) || 0;
   const loadingTonnage = Number(weighSupplementForm.loadingTonnage) || unloadingTonnage;
@@ -1761,7 +1798,9 @@ function saveWeighSupplement() {
       receivedFreight: taxableOutput,
       collectionDate: weighSupplementForm.unloadingDate,
       period: `${weighSupplementForm.unloadingDate.slice(0, 7).replace('-', '年')}月`,
-      sourceBillId: ''
+      sourceBillId: '',
+      routeKey,
+      routeMatched: Boolean(matchedRoute)
     },
     ...manualWeighRows.value
   ];
@@ -1851,6 +1890,58 @@ function onBaseValuesRouteChange(routeKey: string) {
   const values = baseValuesForProject(selectedProjectId.value, routeKey);
   baseValuesDraft.taxableUnitPrice = values.taxableUnitPrice;
   baseValuesDraft.driverSalary = values.driverSalary;
+}
+
+// 项目线路管理
+const routeManageProject = computed(() => projects.find((project) => project.id === routeManageProjectId.value));
+const routeManageRoutes = computed(() => projectRoutes.value.filter((route) => route.projectId === routeManageProjectId.value));
+
+function openRouteManage(projectId: string) {
+  routeManageProjectId.value = projectId;
+  routeManageForm.name = '';
+  routeManageForm.shipperAliasesText = '';
+  routeManageForm.receiverAliasesText = '';
+  routeManageVisible.value = true;
+}
+
+function splitAliases(text: string) {
+  return text
+    .split(/[、,，;；\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function saveRouteMapping() {
+  const name = routeManageForm.name.trim();
+  const shipperAliases = splitAliases(routeManageForm.shipperAliasesText);
+  const receiverAliases = splitAliases(routeManageForm.receiverAliasesText);
+  if (!name || !shipperAliases.length || !receiverAliases.length) {
+    message.error('线路名称、发货单位、收货单位都需要填写');
+    return;
+  }
+  if (routeManageRoutes.value.some((route) => route.name === name)) {
+    message.error(`线路「${name}」已存在，可删除后重建`);
+    return;
+  }
+  addProjectRoute({ projectId: routeManageProjectId.value, name, shipperAliases, receiverAliases });
+  routeManageForm.name = '';
+  routeManageForm.shipperAliasesText = '';
+  routeManageForm.receiverAliasesText = '';
+  message.success(`已新增线路「${name}」，匹配到的磅单将自动回填该线路`);
+}
+
+function toggleProjectRoute(routeId: string) {
+  const route = projectRoutes.value.find((item) => item.id === routeId);
+  if (!route) return;
+  route.enabled = !route.enabled;
+  message.success(`线路「${route.name}」已${route.enabled ? '启用' : '停用'}`);
+}
+
+function deleteProjectRoute(routeId: string) {
+  const route = projectRoutes.value.find((item) => item.id === routeId);
+  if (!route) return;
+  removeProjectRoute(routeId);
+  message.success(`已删除线路「${route.name}」`);
 }
 
 function openBaseValuesModal() {
@@ -2025,6 +2116,18 @@ function nextWeigh() {
   const total = auditWeighPairs.value.length || 1;
   reviewWeighPairIndex.value = (reviewWeighPairIndex.value + 1) % total;
   activeFieldKey.value = '';
+}
+
+// 审核页线路下拉：当前磅单所属项目已配置的启用线路
+const currentPairRouteOptions = computed(() =>
+  projectRoutes.value.filter((route) => route.projectId === currentWeighPair.value?.projectId && route.enabled).map((route) => route.name)
+);
+
+function setWeighPairRoute(routeName: string) {
+  const pair = currentWeighPair.value;
+  if (!pair) return;
+  weighRouteOverrides.value = { ...weighRouteOverrides.value, [pair.id]: routeName };
+  message.success(`线路已指定为「${routeName}」，计价将按该线路配置`);
 }
 
 function jumpToWeighPair(index: number) {
@@ -2780,6 +2883,9 @@ onBeforeUnmount(() => {
             </div>
             <div class="summary-tags">
               <a-tag :color="statusColor(currentWeighPair.status)">{{ currentWeighPair.status }}</a-tag>
+              <a-tag :color="currentWeighPair.routeMatched ? 'green' : 'orange'">
+                线路{{ currentWeighPair.routeMatched ? `已匹配 ${currentWeighPair.route}` : '未匹配' }}
+              </a-tag>
               <a-tag v-for="item in currentWeighPair.anomalies" :key="item" color="red">{{ item }}</a-tag>
             </div>
           </div>
@@ -2843,7 +2949,18 @@ onBeforeUnmount(() => {
                       @mouseleave="activeFieldKey = ''"
                     >
                       <span>{{ item.label }}</span>
-                      <a-input :value="String(item.value)" size="small" :disabled="item.source === 'none'" @update:value="onWeighInput(item.key, $event)" />
+                      <a-select
+                        v-if="item.key === 'route'"
+                        :value="currentWeighPair.routeMatched ? currentWeighPair.route : undefined"
+                        size="small"
+                        show-search
+                        :placeholder="currentWeighPair.route"
+                        class="route-field-select"
+                        @update:value="setWeighPairRoute"
+                      >
+                        <a-select-option v-for="name in currentPairRouteOptions" :key="name" :value="name">{{ name }}</a-select-option>
+                      </a-select>
+                      <a-input v-else :value="String(item.value)" size="small" :disabled="item.source === 'none'" @update:value="onWeighInput(item.key, $event)" />
                       <span class="field-issue">{{ currentWeighPair.anomalies.find((issue) => issue.includes(item.label.slice(0, 2))) || '-' }}</span>
                     </div>
                   </div>
@@ -2887,6 +3004,7 @@ onBeforeUnmount(() => {
             <span>含税单价、司机工资按线路分别配置</span>
             <b class="configured-count">已配置线路 {{ configuredRouteList.length }} / {{ weighRouteOptions.length }} 条</b>
             <span>含税产值 = 卸货吨位 × 含税单价；利润 = 含税产值 - 货物险 - 司机工资 - 税点</span>
+            <a-button size="small" @click="openRouteManage(selectedProjectId)">线路管理</a-button>
             <a-button size="small" @click="openBaseValuesModal">按线路配置</a-button>
           </div>
           <div class="filter-bar filter-bar-wide">
@@ -3422,6 +3540,7 @@ onBeforeUnmount(() => {
                             <template #icon><EditOutlined /></template>
                             编辑
                           </a-button>
+                          <a-button size="small" @click.stop="openRouteManage(project.id)">线路管理</a-button>
                           <a-button size="small" @click.stop="openProjectWorkbench(project.id)">工作台</a-button>
                         </div>
                       </td>
@@ -3793,6 +3912,56 @@ onBeforeUnmount(() => {
         <label><span>卸货吨位*</span><a-input-number v-model:value="weighSupplementForm.unloadingTonnage" :min="0" :precision="2" style="width:100%" /></label>
       </div>
       <p class="weigh-edit-tip">补录后按当前项目「装货地点 → 卸货地点」线路单价自动计算含税产值、税点与利润。</p>
+    </a-modal>
+
+    <a-modal v-model:open="routeManageVisible" title="项目线路管理" width="720px" :footer="null">
+      <div class="route-manage">
+        <p class="route-manage-tip">
+          为 <b>{{ routeManageProject?.name ?? '当前项目' }}</b> 配置线路，并声明发货单位 / 收货单位在磅单上可能出现的各种写法。
+          磅单审核时<b>发货与收货双端都命中</b>才自动回填线路；只命中一边或都未命中则留空并标疑点。回填后的线路名同时作为「按线路配置」单价与司机工资的口径。
+        </p>
+
+        <div class="route-manage-form">
+          <label>
+            <span>线路名称</span>
+            <a-input v-model:value="routeManageForm.name" placeholder="如 北京-上海" />
+          </label>
+          <label>
+            <span>发货单位<i>多个写法用顿号或逗号分隔</i></span>
+            <a-textarea v-model:value="routeManageForm.shipperAliasesText" :rows="2" placeholder="如 北京科技有限公司、北京科技公司" />
+          </label>
+          <label>
+            <span>收货单位<i>多个写法用顿号或逗号分隔</i></span>
+            <a-textarea v-model:value="routeManageForm.receiverAliasesText" :rows="2" placeholder="如 上海物流公司、上海物流有限公司" />
+          </label>
+          <a-button type="primary" @click="saveRouteMapping">
+            <template #icon><PlusOutlined /></template>
+            新增线路
+          </a-button>
+        </div>
+
+        <div class="route-manage-list">
+          <div v-for="route in routeManageRoutes" :key="route.id" class="route-manage-item" :class="{ disabled: !route.enabled }">
+            <div class="route-manage-name">
+              <strong>{{ route.name }}</strong>
+              <a-tag :color="route.enabled ? 'green' : 'default'">{{ route.enabled ? '启用' : '停用' }}</a-tag>
+            </div>
+            <div class="route-manage-alias">
+              <span>发货</span>
+              <a-tag v-for="alias in route.shipperAliases" :key="alias" color="blue">{{ alias }}</a-tag>
+            </div>
+            <div class="route-manage-alias">
+              <span>收货</span>
+              <a-tag v-for="alias in route.receiverAliases" :key="alias" color="cyan">{{ alias }}</a-tag>
+            </div>
+            <div class="route-manage-actions">
+              <a-switch :checked="route.enabled" size="small" @change="toggleProjectRoute(route.id)" />
+              <a-button size="small" danger @click="deleteProjectRoute(route.id)">删除</a-button>
+            </div>
+          </div>
+          <p v-if="!routeManageRoutes.length" class="muted">该项目还没有配置线路，填写上方表单新增。</p>
+        </div>
+      </div>
     </a-modal>
 
     <a-modal v-model:open="baseValuesModalVisible" title="按线路配置基本数值" width="520px" ok-text="保存" cancel-text="取消" @ok="saveBaseValues">

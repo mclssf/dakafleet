@@ -926,6 +926,99 @@ button.mini-result {
   min-width: 240px;
 }
 
+/* 项目线路管理弹窗 */
+.route-field-select {
+  width: 100%;
+}
+.route-manage-tip {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.route-manage-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #f8fafc;
+  margin-bottom: 14px;
+}
+
+.route-manage-form label span {
+  display: block;
+  margin-bottom: 5px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.route-manage-form label span i {
+  margin-left: 6px;
+  color: #94a3b8;
+  font-weight: 400;
+  font-style: normal;
+}
+
+.route-manage-form .ant-btn {
+  justify-self: start;
+}
+
+.route-manage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.route-manage-item {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.route-manage-item.disabled .route-manage-name strong,
+.route-manage-item.disabled .route-manage-alias {
+  opacity: 0.45;
+}
+
+.route-manage-name strong {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 3px;
+}
+
+.route-manage-alias {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.route-manage-alias > span {
+  color: #94a3b8;
+  font-size: 11px;
+  margin-right: 2px;
+}
+
+.route-manage-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .review-grid {
   min-height: 0;
   display: grid;

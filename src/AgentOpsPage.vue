@@ -11,6 +11,7 @@ import {
   MessageOutlined,
   PlusOutlined,
   SafetyCertificateOutlined,
+  SettingOutlined,
   TeamOutlined,
   UploadOutlined
 } from '@ant-design/icons-vue';
@@ -25,7 +26,8 @@ type ConfigTab = 'employees' | 'wechatGroups' | 'dictionary';
 type DictTab = 'alias' | 'controlled' | 'rules';
 type MatchMode = '精确' | '包含' | '正则';
 type AliasSource = '手工录入' | '历史挖掘' | '用户修正';
-type DictDimension = '装货客户' | '卸货客户' | '货物名称' | '矿别' | '线路' | '磅单员' | '承运单位';
+// 维度可由运营自行扩展（磅单、报销等不同单据的字段），因此用字符串而非固定联合类型
+type DictDimension = string;
 
 interface DictAlias {
   text: string;
@@ -55,7 +57,7 @@ interface DictCandidate {
   values: Array<{ text: string; count: number }>;
 }
 
-// 受控值集：车牌/司机/承运单位绑定车辆档案，只做纠错不建别名
+// 受控值集：车牌/司机/客户绑定车辆档案，只做纠错不建别名
 interface ControlledField {
   key: string;
   label: string;
@@ -306,12 +308,13 @@ const wechatGroups = ref<WechatGroup[]>([
 ]);
 
 // ===== 企业字典 =====
-const dictDimensions: DictDimension[] = ['装货客户', '卸货客户', '货物名称', '矿别', '线路', '磅单员', '承运单位'];
+// 维度可增删：内置磅单 / 报销常用维度，运营可为其它单据自行新增
+const dictDimensions = ref<DictDimension[]>(['发货单位', '收货单位', '客户', '货物名称', '线路', '磅单员', '报销费用类型', '收款方']);
 
 const dictEntries = ref<DictEntry[]>([
   {
     id: 'dict-1',
-    dimension: '装货客户',
+    dimension: '发货单位',
     standard: '云南省煤炭交易（储配）中心有限公司',
     code: 'CUST-001',
     enterpriseId: 'southwest-line',
@@ -341,7 +344,7 @@ const dictEntries = ref<DictEntry[]>([
   },
   {
     id: 'dict-3',
-    dimension: '卸货客户',
+    dimension: '收货单位',
     standard: '曲靖园区料场',
     enterpriseId: 'qujing-jieyun',
     projectId: 'p-qujing-sand',
@@ -352,7 +355,7 @@ const dictEntries = ref<DictEntry[]>([
   },
   {
     id: 'dict-4',
-    dimension: '承运单位',
+    dimension: '客户',
     standard: '云志合通科技（云南）有限公司',
     code: 'CARR-001',
     enterpriseId: 'southwest-line',
@@ -379,14 +382,15 @@ const dictEntries = ref<DictEntry[]>([
   },
   {
     id: 'dict-6',
-    dimension: '矿别',
-    standard: '32-2',
-    enterpriseId: 'southwest-line',
+    dimension: '报销费用类型',
+    standard: '补电费',
+    enterpriseId: 'huayin-logistics',
     aliases: [
-      { text: '32—2', mode: '精确', priority: 1, source: '历史挖掘' },
-      { text: '^32[-—_]?2$', mode: '正则', priority: 3, source: '手工录入' }
+      { text: '充电费', mode: '精确', priority: 1, source: '历史挖掘' },
+      { text: '电费', mode: '精确', priority: 2, source: '历史挖掘' },
+      { text: '补电', mode: '包含', priority: 3, source: '手工录入' }
     ],
-    hitCount: 4,
+    hitCount: 5,
     lastHitAt: '2026-06-29',
     enabled: true
   },
@@ -409,7 +413,7 @@ const dictEntries = ref<DictEntry[]>([
 const dictCandidates = ref<DictCandidate[]>([
   {
     id: 'cand-1',
-    dimension: '装货客户',
+    dimension: '发货单位',
     similarity: 92,
     values: [
       { text: '云南省煤炭交易（储配）中心有限公司', count: 2 },
@@ -439,7 +443,10 @@ const dictCandidates = ref<DictCandidate[]>([
 const controlledFields: ControlledField[] = [
   { key: 'vehiclePlate', label: '车牌号', source: '车辆档案 vehicles.plate', valueCount: 54, desc: '字符纠错表归一后回档案精确校验，不在档标疑点' },
   { key: 'driver', label: '驾驶员', source: '车辆档案 vehicles.driver', valueCount: 54, desc: '优先按车牌联动反查，识别文本仅做同音/形近确认' },
-  { key: 'carrier', label: '承运单位', source: '车辆档案 vehicles.owner', valueCount: 3, desc: '按车牌联动反查；别名字典兜底（如「云志合通」简称）' }
+  { key: 'carrier', label: '客户', source: '车辆档案 vehicles.owner', valueCount: 3, desc: '按车牌联动反查；别名字典兜底（如「云志合通」简称）' },
+  { key: 'shipper', label: '发货单位', source: '企业字典「发货单位」维度 + 项目线路映射', valueCount: 5, desc: '别名归一到标准值；同时作为线路匹配的发货端依据' },
+  { key: 'receiver', label: '收货单位', source: '企业字典「收货单位」维度 + 项目线路映射', valueCount: 6, desc: '别名归一到标准值；同时作为线路匹配的收货端依据' },
+  { key: 'maker', label: '磅单员', source: '企业字典「磅单员」维度（历史数据映射）', valueCount: 4, desc: '无内部人员表，按历史磅单聚合出常用制单人，错字走别名归一（如 陈会记→陈会计）' }
 ];
 
 // 车牌 OCR 字符混淆对：全局一张表，双向纠错
@@ -464,7 +471,7 @@ const routeRules = ref<RouteRule[]>([
 type RuleAction = '自动纠正并标疑点' | '仅标疑点';
 
 const linkRules = ref([
-  { id: 'R1', name: '车牌 → 驾驶员 / 承运单位 / 挂车', desc: '按车辆档案反查，识别结果与档案不符时按冲突动作处理', kind: '档案联动', enabled: true, action: '自动纠正并标疑点' as RuleAction },
+  { id: 'R1', name: '车牌 → 驾驶员 / 客户 / 挂车', desc: '按车辆档案反查，识别结果与档案不符时按冲突动作处理', kind: '档案联动', enabled: true, action: '自动纠正并标疑点' as RuleAction },
   { id: 'R2', name: '装货地 + 卸货地 → 线路白名单', desc: '组合不在下方白名单内时按冲突动作处理；白名单支持运营自行新增映射', kind: '白名单', enabled: true, action: '仅标疑点' as RuleAction },
   { id: 'R3', name: '客户 → 允许货物', desc: '如华银铝业只应出现氧化铝类货物，越界按冲突动作处理', kind: '约束', enabled: false, action: '仅标疑点' as RuleAction },
   { id: 'R4', name: '货物 → 允许矿别', desc: '如褐煤32只应对应矿别 32-2，越界按冲突动作处理', kind: '约束', enabled: false, action: '仅标疑点' as RuleAction }
@@ -618,7 +625,7 @@ const isMemoryDrawerOpen = ref(false);
 const isCandidateDrawerOpen = ref(false);
 
 const dictForm = reactive({
-  dimension: '装货客户' as DictDimension,
+  dimension: '发货单位' as DictDimension,
   standard: '',
   code: '',
   enterpriseId: 'southwest-line',
@@ -655,8 +662,42 @@ const dictFormProjects = computed(() => tenantProjects.filter((project) => proje
 const isEditingDict = computed(() => editingDictId.value.length > 0);
 
 // 修正记忆分流：开集维度可转别名；车牌/驾驶员属受控字段，仅提示（应修档案或纠错表）
-const aliasMemories = computed(() => correctionMemories.value.filter((item) => (dictDimensions as string[]).includes(item.dimension)));
-const controlledMemories = computed(() => correctionMemories.value.filter((item) => !(dictDimensions as string[]).includes(item.dimension)));
+const aliasMemories = computed(() => correctionMemories.value.filter((item) => dictDimensions.value.includes(item.dimension)));
+const controlledMemories = computed(() => correctionMemories.value.filter((item) => !dictDimensions.value.includes(item.dimension)));
+
+// 维度管理：新增后可直接用于字典项；已被引用的维度不允许删除
+const isDimensionModalOpen = ref(false);
+const newDimensionName = ref('');
+
+function dimensionUsage(dimension: DictDimension) {
+  return dictEntries.value.filter((entry) => entry.dimension === dimension).length;
+}
+
+function addDimension() {
+  const name = newDimensionName.value.trim();
+  if (!name) {
+    message.error('请填写维度名称');
+    return;
+  }
+  if (dictDimensions.value.includes(name)) {
+    message.error('该维度已存在');
+    return;
+  }
+  dictDimensions.value.push(name);
+  newDimensionName.value = '';
+  message.success(`已新增维度「${name}」`);
+}
+
+function removeDimension(dimension: DictDimension) {
+  const used = dimensionUsage(dimension);
+  if (used) {
+    message.error(`「${dimension}」下还有 ${used} 条字典项，请先处理后再删除`);
+    return;
+  }
+  dictDimensions.value = dictDimensions.value.filter((item) => item !== dimension);
+  if (dictDimensionFilter.value === dimension) dictDimensionFilter.value = 'all';
+  message.success(`已删除维度「${dimension}」`);
+}
 
 const filteredRouteRules = computed(() =>
   routeRules.value.filter((rule) => dictEnterpriseFilter.value === 'all' || rule.enterpriseId === dictEnterpriseFilter.value)
@@ -1647,6 +1688,10 @@ function validateEmployee() {
                   <a-select-option v-for="dim in dictDimensions" :key="dim" :value="dim">{{ dim }}</a-select-option>
                 </a-select>
                 <a-input v-if="dictTab === 'alias'" v-model:value="dictKeyword" placeholder="搜索标准值或别名" allow-clear class="dict-search" />
+                <a-button v-if="dictTab === 'alias'" @click="isDimensionModalOpen = true">
+                  <template #icon><SettingOutlined /></template>
+                  管理维度
+                </a-button>
               </div>
 
               <!-- 别名字典 -->
@@ -1702,7 +1747,7 @@ function validateEmployee() {
               <!-- 受控值集 -->
               <template v-else-if="dictTab === 'controlled'">
                 <p class="dict-note">
-                  这几个字段在系统里已有权威档案，<b>不建别名</b>：识别结果先用字符纠错表归一，再回档案精确校验，不在档的标疑点等人工确认。档案更新后字典自动跟随。
+                  纠错字段分两类：车牌号 / 驾驶员 / 客户在系统里<b>已有权威档案</b>，识别结果先用字符纠错表归一，再回档案精确校验，不在档的标疑点，档案更新后自动跟随；发货单位 / 收货单位 / 磅单员<b>没有内部档案</b>，以历史数据映射为准，纠错依赖别名字典对应维度，发 / 收货单位还会作为项目线路匹配的两端依据。
                 </p>
                 <table class="ops-table dict-table">
                   <thead>
@@ -1742,7 +1787,7 @@ function validateEmployee() {
                     </div>
                   </div>
                   <div class="dict-example">
-                    示例：识别 <b>赣J0352BD</b> → 按 8↔B 纠错得 <b>赣J03528D</b> → 命中车辆档案 → 联动带出驾驶员「罗明」、承运单位「云志合通科技（云南）有限公司」
+                    示例：识别 <b>赣J0352BD</b> → 按 8↔B 纠错得 <b>赣J03528D</b> → 命中车辆档案 → 联动带出驾驶员「罗明」、客户「云志合通科技（云南）有限公司」
                   </div>
                 </div>
               </template>
@@ -2276,6 +2321,36 @@ function validateEmployee() {
               :placeholder="allowModalKind === 'customerGoods' ? '如 氧化铝、散装氧化铝' : '如 A-20、A-21、H-06'"
             />
           </label>
+        </div>
+      </div>
+    </a-modal>
+
+    <a-modal v-model:open="isDimensionModalOpen" title="管理字典维度" width="600px" :footer="null">
+      <div class="dict-form">
+        <p class="dict-note">
+          维度不限于磅单字段。报销审核的费用类型、收款方等也可以建成维度，共用同一套别名归一能力。已被字典项引用的维度不能删除。
+        </p>
+        <div class="dimension-add-row">
+          <a-input v-model:value="newDimensionName" placeholder="新维度名称，如 报销事项、付款账户" @keydown.enter="addDimension" />
+          <a-button type="primary" @click="addDimension">
+            <template #icon><PlusOutlined /></template>
+            新增维度
+          </a-button>
+        </div>
+        <div class="dimension-list">
+          <div v-for="dim in dictDimensions" :key="dim" class="dimension-item">
+            <strong>{{ dim }}</strong>
+            <span>{{ dimensionUsage(dim) }} 条字典项</span>
+            <button
+              type="button"
+              class="plate-pair-remove"
+              :disabled="dimensionUsage(dim) > 0"
+              :title="dimensionUsage(dim) > 0 ? '该维度下还有字典项，不能删除' : '删除维度'"
+              @click="removeDimension(dim)"
+            >
+              <DeleteOutlined />
+            </button>
+          </div>
         </div>
       </div>
     </a-modal>
@@ -3828,7 +3903,8 @@ function validateEmployee() {
   font-size: 13px;
 }
 
-.dict-subsection-head span {
+/* 只作用于标题区的说明文字，避免命中旁边按钮内部的 span */
+.dict-subsection-head > div > span {
   display: block;
   margin-top: 2px;
   color: #94a3b8;
@@ -3936,11 +4012,50 @@ function validateEmployee() {
   font-size: 13px;
 }
 
-.dict-form-alias-head span {
+.dict-form-alias-head > div > span {
   display: block;
   margin-top: 2px;
   color: #94a3b8;
   font-size: 12px;
+}
+
+.dimension-add-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dimension-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.dimension-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.dimension-item strong {
+  font-size: 13px;
+}
+
+.dimension-item span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.plate-pair-remove:disabled {
+  color: #e2e8f0;
+  cursor: not-allowed;
 }
 
 .dict-alias-row {
