@@ -3,6 +3,7 @@ import { computed, reactive, ref } from 'vue';
 import { DownloadOutlined, ImportOutlined, PlusOutlined, SearchOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons-vue';
 import { Modal, message } from 'ant-design-vue';
 import type { ChargingRecord, RecordDataSource } from './types';
+import ImportReviewModal, { type ImportColumn } from './ImportReviewModal.vue';
 
 const DEFAULT_CAPACITY = 430;
 
@@ -182,8 +183,42 @@ function batchDelete() {
 function exportRows() {
   message.success(`已导出 ${filtered.value.length} 条充电记录（Demo 模拟）`);
 }
+// 上游表格导入：选文件 → 列名自动匹配预览 → 异常行标红补全 → 确认导入
+const tableImportVisible = ref(false);
+const tableImportColumns: ImportColumn[] = [
+  { key: 'date', label: '日期', sourceNames: ['充电日期'], required: true },
+  { key: 'vehiclePlate', label: '车牌号', sourceNames: ['车牌'], required: true },
+  { key: 'chargingKwh', label: '充电度数', sourceNames: ['电量(kWh)'], type: 'number', required: true },
+  { key: 'unitPrice', label: '单价', sourceNames: ['电价'], type: 'number' },
+  { key: 'serviceFee', label: '服务费', sourceNames: ['服务费(元)'], type: 'number' },
+  { key: 'totalAmount', label: '总金额', sourceNames: ['金额合计'], type: 'number' },
+  { key: 'chargingStation', label: '充电站', sourceNames: ['站点'] }
+];
+const tableImportRows = [
+  { date: '2026-06-29', vehiclePlate: '赣J03528D', chargingKwh: 286, unitPrice: 0.9, serviceFee: 36, totalAmount: 293.4, chargingStation: '砚山储配站充电桩' },
+  { date: '2026-06-29', vehiclePlate: '赣J01379D', chargingKwh: 302, unitPrice: 0.88, serviceFee: 38, totalAmount: 303.8, chargingStation: '德保电厂充电站' },
+  { date: '2026-06-28', vehiclePlate: '', chargingKwh: 264, unitPrice: 0.92, serviceFee: 33, totalAmount: 275.9, chargingStation: '龙临加油充电站' },
+  { date: '2026-06-28', vehiclePlate: '粤B98790D', chargingKwh: null, unitPrice: 0.9, serviceFee: 30, totalAmount: null, chargingStation: '田东服务区充电站' }
+];
 function importUpstream() {
-  message.info('弹出文件选择，支持 .xlsx/.xls/.csv 上游系统表格导入（Demo 模拟）');
+  tableImportVisible.value = true;
+}
+function confirmTableImport(rows: Array<Record<string, string | number | null>>) {
+  const added = rows.map((row) =>
+    make({
+      dataSource: 'upstream_import',
+      id: `CR_${Math.round(Math.random() * 1e9)}`,
+      date: String(row.date),
+      vehiclePlate: String(row.vehiclePlate),
+      chargingKwh: Number(row.chargingKwh) || 0,
+      unitPrice: row.unitPrice == null ? null : Number(row.unitPrice),
+      serviceFee: row.serviceFee == null ? null : Number(row.serviceFee),
+      totalAmount: row.totalAmount == null ? null : Number(row.totalAmount),
+      chargingStation: String(row.chargingStation ?? '')
+    })
+  );
+  records.value = [...added, ...records.value];
+  message.success(`已导入 ${added.length} 条充电记录`);
 }
 
 // 手动添加
@@ -291,6 +326,15 @@ function saveAdd() {
         <label class="wide"><span>备注</span><a-input v-model:value="addForm.remark" /></label>
       </div>
     </a-modal>
+
+    <ImportReviewModal
+      v-model:open="tableImportVisible"
+      title="导入上游系统表格 · 审核后导入"
+      file-name="充电流水_上游系统_202606.xlsx"
+      :columns="tableImportColumns"
+      :sample-rows="tableImportRows"
+      @confirm="confirmTableImport"
+    />
   </section>
 </template>
 

@@ -3,6 +3,7 @@ import { computed, reactive, ref } from 'vue';
 import { DownloadOutlined, ImportOutlined, PlusOutlined, SearchOutlined, DeleteOutlined, EditOutlined, PictureOutlined, FileImageOutlined } from '@ant-design/icons-vue';
 import { Modal, message } from 'ant-design-vue';
 import type { MaintenanceCategory, MaintenanceRecord, RecordDataSource } from './types';
+import ImportReviewModal, { type ImportColumn } from './ImportReviewModal.vue';
 import { expenseImages } from './data';
 
 const categoryOptions: MaintenanceCategory[] = ['维修费-轮胎', '维修费-底盘', '维修费-刹车', '维修费-货箱', '维修费-电路', '维修费-液压', '维修费-电焊', '维修费-大修', '维修费-施救', '维修费-耗材', '维修费-工时', '维修费-其他'];
@@ -219,8 +220,40 @@ function batchPaid() {
 function exportRows() {
   message.success(`已导出 ${filtered.value.length} 条维修记录（Demo 模拟）`);
 }
+// 表格导入：选文件 → 列名自动匹配预览 → 异常行标红补全 → 确认导入
+const tableImportVisible = ref(false);
+const tableImportColumns: ImportColumn[] = [
+  { key: 'date', label: '日期', sourceNames: ['维修日期'], required: true },
+  { key: 'vendor', label: '对方账户', sourceNames: ['维修厂家'] },
+  { key: 'vehiclePlate', label: '车牌号', sourceNames: ['车牌'], required: true },
+  { key: 'description', label: '维修内容', sourceNames: ['项目说明'], required: true },
+  { key: 'amount', label: '支出金额', sourceNames: ['金额(元)'], type: 'number', required: true },
+  { key: 'remark', label: '备注', sourceNames: ['备注'] }
+];
+const tableImportRows = [
+  { date: '2026-06-29', vendor: '高速汽配', vehiclePlate: '赣J05590D', description: '更换空气滤芯 + 保养', amount: 620, remark: '' },
+  { date: '2026-06-29', vendor: '顺达底盘', vehiclePlate: '赣J05601D', description: '前桥球头更换', amount: 1350, remark: '质保 6 个月' },
+  { date: '2026-06-28', vendor: '鑫源电路', vehiclePlate: '', description: '大灯线路检修', amount: 380, remark: '' },
+  { date: '2026-06-27', vendor: '高速汽配', vehiclePlate: '赣J05612D', description: '', amount: null, remark: '单据模糊待补' }
+];
 function importTable() {
-  message.info('上传维修清单 Excel/CSV 导入，自动匹配列名（Demo 模拟）');
+  tableImportVisible.value = true;
+}
+function confirmTableImport(rows: Array<Record<string, string | number | null>>) {
+  const added = rows.map((row) =>
+    make({
+      dataSource: 'table_import',
+      id: `MT_${Math.round(Math.random() * 1e9)}`,
+      date: String(row.date),
+      vendor: String(row.vendor ?? ''),
+      vehiclePlate: String(row.vehiclePlate),
+      description: String(row.description),
+      amount: Number(row.amount) || 0,
+      remark: String(row.remark ?? '')
+    })
+  );
+  records.value = [...added, ...records.value];
+  message.success(`已导入 ${added.length} 条维修记录`);
 }
 
 // 批量导入图片识别流程：上传多张图片 → 逐张 OCR 识别草稿 → 批量审核修改 → 批量导入
@@ -412,6 +445,15 @@ function saveAdd() {
         <label><span>备注</span><a-input v-model:value="addForm.remark" /></label>
       </div>
     </a-modal>
+
+    <ImportReviewModal
+      v-model:open="tableImportVisible"
+      title="导入定点维修表格 · 审核后导入"
+      file-name="定点维修明细_202606.xlsx"
+      :columns="tableImportColumns"
+      :sample-rows="tableImportRows"
+      @confirm="confirmTableImport"
+    />
   </section>
 </template>
 

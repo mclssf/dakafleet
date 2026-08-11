@@ -927,97 +927,36 @@ button.mini-result {
 }
 
 /* 项目线路管理弹窗 */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 .route-field-select {
   width: 100%;
 }
-.route-manage-tip {
-  margin: 0 0 12px;
-  padding: 9px 12px;
-  border: 1px solid #dbeafe;
-  border-radius: 8px;
-  background: #eff6ff;
-  color: #1e40af;
-  font-size: 12px;
-  line-height: 1.7;
-}
 
-.route-manage-form {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 9px;
-  background: #f8fafc;
-  margin-bottom: 14px;
-}
 
-.route-manage-form label span {
-  display: block;
-  margin-bottom: 5px;
-  color: #475569;
-  font-size: 12px;
-  font-weight: 600;
-}
 
-.route-manage-form label span i {
-  margin-left: 6px;
-  color: #94a3b8;
-  font-weight: 400;
-  font-style: normal;
-}
 
-.route-manage-form .ant-btn {
-  justify-self: start;
-}
 
-.route-manage-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 40vh;
-  overflow: auto;
-}
 
-.route-manage-item {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #ffffff;
-}
 
-.route-manage-item.disabled .route-manage-name strong,
-.route-manage-item.disabled .route-manage-alias {
-  opacity: 0.45;
-}
 
-.route-manage-name strong {
-  display: block;
-  font-size: 13px;
-  margin-bottom: 3px;
-}
 
-.route-manage-alias {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-}
 
-.route-manage-alias > span {
-  color: #94a3b8;
-  font-size: 11px;
-  margin-right: 2px;
-}
 
-.route-manage-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 
 .review-grid {
   min-height: 0;
@@ -2641,7 +2580,6 @@ button.mini-result {
   gap: 5px;
   margin-right: 10px;
 }
-
 .manage-stat-inline b {
   color: #0f172a;
   font-size: 14px;
@@ -2805,6 +2743,130 @@ button.mini-result {
 
 .create-basic-grid .wide {
   grid-column: 1 / -1;
+}
+
+/* 新建/编辑项目：项目级计价参数 */
+.editor-project-base {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  margin-bottom: 10px;
+}
+
+.editor-project-base-title {
+  flex-basis: 100%;
+  color: #526174;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.editor-project-base label {
+  display: grid;
+  gap: 5px;
+}
+
+.editor-project-base label span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.editor-project-base em {
+  flex: 1;
+  min-width: 220px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: normal;
+}
+
+/* 新建/编辑项目：结构化线路配置 */
+.editor-route-section {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+
+.editor-route-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.editor-route-head strong {
+  display: block;
+  font-size: 13px;
+}
+
+.editor-route-head > div > span {
+  display: block;
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.editor-route-card {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  margin-bottom: 8px;
+}
+
+.editor-route-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.editor-route-grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+.editor-route-grid label {
+  display: grid;
+  gap: 5px;
+}
+
+.editor-route-grid label span {
+  color: #526174;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.editor-route-grid label span i {
+  margin-left: 5px;
+  color: #94a3b8;
+  font-weight: 400;
+  font-style: normal;
+}
+
+.editor-route-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 2px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.editor-route-remove:hover {
+  color: #dc2626;
+  border-color: #fecaca;
 }
 
 .create-skill-section {

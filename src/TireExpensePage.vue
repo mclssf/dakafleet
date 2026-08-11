@@ -4,6 +4,7 @@ import { DownloadOutlined, ImportOutlined, PlusOutlined, SearchOutlined, DeleteO
 import { Modal, message } from 'ant-design-vue';
 import type { RecordDataSource, TirePosition, TireRecord } from './types';
 import { expenseImages } from './data';
+import ImportReviewModal, { type ImportColumn } from './ImportReviewModal.vue';
 
 const positionLabels: Record<string, string> = { FL: '前左', FR: '前右', RL: '后左', RR: '后右', SPARE: '备胎' };
 const positionOptions: { value: Exclude<TirePosition, null>; label: string }[] = [
@@ -57,7 +58,7 @@ const dateRange = ref<string[]>([]);
 const keyword = ref('');
 const posFilter = ref<'全部' | Exclude<TirePosition, null>>('全部');
 const payFilter = ref<'全部' | '已付' | '未付'>('全部');
-const sourceFilter = ref<'全部' | 'table_import' | 'manual' | 'payment_sync'>('全部');
+const sourceFilter = ref<'全部' | 'table_import' | 'image_ocr' | 'manual' | 'payment_sync'>('全部');
 const selectedRowKeys = ref<string[]>([]);
 const editingId = ref('');
 const editDraft = reactive<Record<string, any>>({});
@@ -65,6 +66,7 @@ const editDraft = reactive<Record<string, any>>({});
 const sourceLabelMap: Record<string, string> = {
   table_import: '批量导入',
   wechat_robot: '批量导入',
+  image_ocr: '图片录入',
   manual: '手动添加',
   payment_sync: '付款明细同步'
 };
@@ -214,11 +216,91 @@ function batchPaid() {
 function exportRows() {
   message.success(`已导出 ${filtered.value.length} 条轮胎记录（Demo 模拟）`);
 }
+// 表格导入：选文件 → 列名自动匹配预览 → 异常行标红补全 → 确认导入
+const tableImportVisible = ref(false);
+const tableImportColumns: ImportColumn[] = [
+  { key: 'date', label: '日期', sourceNames: ['更换日期'], required: true },
+  { key: 'vendor', label: '供应商', sourceNames: ['对方账户'] },
+  { key: 'vehiclePlate', label: '车牌号', sourceNames: ['车牌'], required: true },
+  { key: 'tirePosition', label: '轮胎位置', sourceNames: ['胎位'] },
+  { key: 'quantity', label: '数量', sourceNames: ['条数'], type: 'number', required: true },
+  { key: 'unitPrice', label: '单价', sourceNames: ['单价(元)'], type: 'number', required: true },
+  { key: 'tireNumber', label: '轮胎编号', sourceNames: ['胎号'] }
+];
+// Demo：故意留两处缺失，演示异常行标红与补全后自动可选
+const tableImportRows = [
+  { date: '2026-06-29', vendor: '鑫源轮胎', vehiclePlate: '赣J05590D', tirePosition: 'FL', quantity: 2, unitPrice: 930, tireNumber: 'LT20260629A' },
+  { date: '2026-06-28', vendor: '路边轮胎店', vehiclePlate: '赣J05601D', tirePosition: 'RR', quantity: 1, unitPrice: 905, tireNumber: null },
+  { date: '2026-06-28', vendor: '李师傅', vehiclePlate: '', tirePosition: 'FR', quantity: 1, unitPrice: 920, tireNumber: null },
+  { date: '2026-06-27', vendor: '鑫源轮胎', vehiclePlate: '赣J05612D', tirePosition: 'RL', quantity: 2, unitPrice: null, tireNumber: null }
+];
 function importTable() {
-  message.info('导入轮胎费用表格，自动匹配列名（Demo 模拟）');
+  tableImportVisible.value = true;
 }
+function confirmTableImport(rows: Array<Record<string, string | number | null>>) {
+  const added = rows.map((row) =>
+    make({
+      dataSource: 'table_import',
+      id: `TR_${Math.round(Math.random() * 1e9)}`,
+      date: String(row.date),
+      vendor: String(row.vendor ?? ''),
+      vehiclePlate: String(row.vehiclePlate),
+      tirePosition: (row.tirePosition ? String(row.tirePosition) : null) as TirePosition,
+      quantity: Number(row.quantity) || 1,
+      unitPrice: Number(row.unitPrice) || 0,
+      tireNumber: row.tireNumber ? String(row.tireNumber) : null
+    })
+  );
+  records.value = [...added, ...records.value];
+  message.success(`已导入 ${added.length} 条轮胎记录`);
+}
+
+// 图片导入：上传多张 → OCR 草稿 → 勾选核对 → 批量导入
+const imageImportVisible = ref(false);
+const imageDrafts = ref<Record<string, any>[]>([]);
+const imageSelectedKeys = ref<number[]>([]);
 function importImage() {
-  message.info('上传轮胎照片，OCR + 手工补充轮胎编号等（Demo 模拟）');
+  const ocr = [
+    { image: expenseImages[1], date: '2026-06-29', vendor: '鑫源轮胎', vehiclePlate: '赣J05623D', tirePosition: 'FL', quantity: 1, unitPrice: 950, tireNumber: 'LT20260629B', remark: 'OCR 识别，请核对' },
+    { image: expenseImages[2], date: '2026-06-28', vendor: '路边轮胎店', vehiclePlate: '赣J05634D', tirePosition: 'RR', quantity: 2, unitPrice: 915, tireNumber: '', remark: 'OCR 识别，胎号未识别请补充' },
+    { image: expenseImages[3], date: '2026-06-27', vendor: '李师傅', vehiclePlate: '赣J05645D', tirePosition: 'RL', quantity: 1, unitPrice: 940, tireNumber: 'LT20260627C', remark: 'OCR 识别，请核对' }
+  ];
+  imageDrafts.value = ocr.map((d, i) => ({ key: i, ...d }));
+  imageSelectedKeys.value = imageDrafts.value.map((d) => d.key);
+  imageImportVisible.value = true;
+}
+function removeImageDraft(key: number) {
+  imageDrafts.value = imageDrafts.value.filter((d) => d.key !== key);
+  imageSelectedKeys.value = imageSelectedKeys.value.filter((k) => k !== key);
+}
+function confirmImageImport() {
+  const chosen = imageDrafts.value.filter((d) => imageSelectedKeys.value.includes(d.key));
+  if (!chosen.length) {
+    message.warning('请至少勾选一条记录');
+    return;
+  }
+  if (chosen.some((d) => !d.date || !d.vehiclePlate || d.unitPrice == null)) {
+    message.warning('勾选记录的日期、车牌、单价均为必填');
+    return;
+  }
+  const added = chosen.map((d) =>
+    make({
+      dataSource: 'image_ocr',
+      id: `TR_${Math.round(Math.random() * 1e9)}`,
+      date: d.date,
+      vendor: d.vendor,
+      vehiclePlate: d.vehiclePlate,
+      tirePosition: (d.tirePosition || null) as TirePosition,
+      quantity: Number(d.quantity) || 1,
+      unitPrice: Number(d.unitPrice) || 0,
+      tireNumber: d.tireNumber || null,
+      remark: d.remark,
+      images: d.image ? [d.image] : []
+    })
+  );
+  records.value = [...added, ...records.value];
+  imageImportVisible.value = false;
+  message.success(`已批量审核并导入 ${added.length} 条轮胎记录`);
 }
 
 const addVisible = ref(false);
@@ -266,6 +348,7 @@ function saveAdd() {
       <a-select v-model:value="sourceFilter" style="width: 100%">
         <a-select-option value="全部">全部来源</a-select-option>
         <a-select-option value="table_import">批量导入</a-select-option>
+        <a-select-option value="image_ocr">图片录入</a-select-option>
         <a-select-option value="manual">手动添加</a-select-option>
         <a-select-option value="payment_sync">付款明细同步</a-select-option>
       </a-select>
@@ -372,6 +455,46 @@ function saveAdd() {
         <label class="wide"><span>备注</span><a-input v-model:value="addForm.remark" /></label>
       </div>
     </a-modal>
+
+    <ImportReviewModal
+      v-model:open="tableImportVisible"
+      title="导入轮胎费用表格 · 审核后导入"
+      file-name="轮胎更换明细_202606.xlsx"
+      :columns="tableImportColumns"
+      :sample-rows="tableImportRows"
+      @confirm="confirmTableImport"
+    />
+
+    <a-modal v-model:open="imageImportVisible" title="轮胎照片识别 · 审核后导入" ok-text="批量审核并导入" cancel-text="取消" width="960px" @ok="confirmImageImport">
+      <div class="batch-import">
+        <p class="batch-import-tip">已识别 {{ imageDrafts.length }} 张图片，勾选并核对修改后批量导入（已选 {{ imageSelectedKeys.length }} 条）。轮胎编号未识别的可在此补充。</p>
+        <a-checkbox-group v-model:value="imageSelectedKeys" class="batch-import-list">
+          <div v-for="d in imageDrafts" :key="d.key" class="batch-import-item">
+            <a-checkbox :value="d.key" class="batch-import-check" />
+            <div class="import-image">
+              <img :src="d.image" alt="轮胎凭证" />
+              <span>OCR 图片</span>
+            </div>
+            <div class="add-form import-fields">
+              <label><span>日期*</span><a-input v-model:value="d.date" /></label>
+              <label><span>维修厂家</span><a-input v-model:value="d.vendor" /></label>
+              <label><span>车牌号*</span><a-input v-model:value="d.vehiclePlate" /></label>
+              <label><span>轮胎位置</span>
+                <a-select v-model:value="d.tirePosition" allow-clear style="width:100%">
+                  <a-select-option v-for="p in positionOptions" :key="p.value" :value="p.value">{{ p.label }}</a-select-option>
+                </a-select>
+              </label>
+              <label><span>数量</span><a-input-number v-model:value="d.quantity" :min="1" style="width:100%" /></label>
+              <label><span>单价*</span><a-input-number v-model:value="d.unitPrice" :min="0" style="width:100%" /></label>
+              <label><span>轮胎号</span><a-input v-model:value="d.tireNumber" placeholder="留空标记待补充" /></label>
+              <label><span>备注</span><a-input v-model:value="d.remark" /></label>
+            </div>
+            <a-button size="small" danger class="batch-import-remove" @click="removeImageDraft(d.key)">移除</a-button>
+          </div>
+        </a-checkbox-group>
+        <a-empty v-if="!imageDrafts.length" description="暂无待导入图片" />
+      </div>
+    </a-modal>
   </section>
 </template>
 
@@ -438,5 +561,57 @@ function saveAdd() {
 }
 .add-form label.wide {
   grid-column: 1 / -1;
+}
+/* 图片批量导入审核 */
+.import-image {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.import-image img {
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+.import-image span {
+  color: #6b5f70;
+  font-size: 12px;
+}
+.batch-import {
+  max-height: 62vh;
+  overflow-y: auto;
+}
+.batch-import-tip {
+  margin: 0 0 12px;
+  color: #6b5f70;
+  font-size: 13px;
+}
+.batch-import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+.batch-import-item {
+  display: grid;
+  grid-template-columns: 24px 200px 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fbfbfb;
+}
+.batch-import-check {
+  margin-top: 6px;
+}
+.batch-import-remove {
+  align-self: center;
+}
+.import-fields {
+  align-content: start;
 }
 </style>

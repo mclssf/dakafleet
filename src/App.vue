@@ -47,7 +47,7 @@ import {
 } from './data';
 import type { AgentMessage, AuditStatus, Expense, FieldBox, PageKey, Project, WeighBill } from './types';
 import { dimensionForField, recordCorrection } from './dictMemory';
-import { addProjectRoute, matchProjectRoute, projectRoutes, removeProjectRoute } from './projectRoutes';
+import { matchProjectRoute, projectRoutes } from './projectRoutes';
 
 const pageHashMap: Record<PageKey, string> = {
   agent: '#/agent',
@@ -155,15 +155,6 @@ const vehicleDateRange = ref<string[]>([]);
 const driverSummaryExpanded = ref(true);
 const projectMenuExpanded = ref(true);
 const agentRightPanelVisible = ref(true);
-const baseValuesModalVisible = ref(false);
-// 项目线路管理：客户自行配置线路及发/收货单位别名
-const routeManageVisible = ref(false);
-const routeManageProjectId = ref('');
-const routeManageForm = reactive({
-  name: '',
-  shipperAliasesText: '',
-  receiverAliasesText: ''
-});
 const dashboardTrendProjectId = ref(projectRows.value[0].id);
 const dashboardTrendMonth = ref('2026-06');
 const todayDate = '2026-06-30';
@@ -209,14 +200,6 @@ interface RouteBaseValues {
   driverSalary: number;
 }
 
-interface BaseValuesDraft {
-  routeKey: string;
-  taxableUnitPrice: number;
-  driverSalary: number;
-  cargoInsurance: number;
-  taxRatePercent: number;
-}
-
 const defaultBaseValues: WeighBaseValues = {
   taxableUnitPrice: 61,
   cargoInsurance: 15,
@@ -240,14 +223,6 @@ const projectBaseValues = ref<Record<string, ProjectBaseValues>>(
 
 // 线路级配置，键为 `${projectId}::${routeKey}`
 const routeBaseValues = ref<Record<string, RouteBaseValues>>({});
-
-const baseValuesDraft = reactive<BaseValuesDraft>({
-  routeKey: '',
-  taxableUnitPrice: defaultBaseValues.taxableUnitPrice,
-  driverSalary: defaultBaseValues.driverSalary,
-  cargoInsurance: defaultBaseValues.cargoInsurance,
-  taxRatePercent: defaultBaseValues.taxRate * 100
-});
 
 const pageTitle: Record<PageKey, string> = {
   agent: '智能体工作台',
@@ -319,12 +294,26 @@ interface ProjectOwnerOption {
 
 interface ProjectEditorForm {
   name: string;
-  route: string;
   customer: string;
+  // 业务说明与项目线路拆开：description 是自由文本，routes 是结构化线路配置
+  description: string;
+  routes: ProjectEditorRoute[];
+  // 项目级计价参数（本项目所有线路统一）
+  cargoInsurance: number;
+  taxRatePercent: number;
   ownerIds: string[];
   tmsEmployeeIds: string[];
   wechatEmployeeIds: string[];
   skillIds: string[];
+}
+
+// 建项目时直接配线路，字段与「线路与计价配置」完全一致
+interface ProjectEditorRoute {
+  name: string;
+  shipperAliasesText: string;
+  receiverAliasesText: string;
+  taxableUnitPrice: number;
+  driverSalary: number;
 }
 
 const projectEmployees = ref<ProjectDataEmployee[]>([
@@ -455,8 +444,11 @@ const projectEditorTab = ref<ProjectEditorTab>('微信群');
 const editingProjectId = ref('');
 const projectEditorForm = reactive<ProjectEditorForm>({
   name: '',
-  route: '',
   customer: '',
+  description: '',
+  routes: [],
+  cargoInsurance: 0,
+  taxRatePercent: 0,
   ownerIds: [],
   tmsEmployeeIds: [],
   wechatEmployeeIds: [],
@@ -1409,16 +1401,44 @@ function employeeStatusColor(status: ProjectDataEmployee['status']) {
   return 'blue';
 }
 
+function splitAliases(text: string) {
+  return text
+    .split(/[、,，;；\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function emptyEditorRoute(): ProjectEditorRoute {
+  return {
+    name: '',
+    shipperAliasesText: '',
+    receiverAliasesText: '',
+    taxableUnitPrice: defaultBaseValues.taxableUnitPrice,
+    driverSalary: defaultBaseValues.driverSalary
+  };
+}
+
 function resetProjectEditor() {
   editingProjectId.value = '';
   projectEditorTab.value = '微信群';
   projectEditorForm.name = '';
-  projectEditorForm.route = '';
   projectEditorForm.customer = '';
+  projectEditorForm.description = '';
+  projectEditorForm.routes = [emptyEditorRoute()];
+  projectEditorForm.cargoInsurance = defaultBaseValues.cargoInsurance;
+  projectEditorForm.taxRatePercent = Number((defaultBaseValues.taxRate * 100).toFixed(2));
   projectEditorForm.ownerIds = [];
   projectEditorForm.tmsEmployeeIds = [];
   projectEditorForm.wechatEmployeeIds = [];
   projectEditorForm.skillIds = ['weigh-ledger-expert', 'expense-audit-expert'];
+}
+
+function addEditorRoute() {
+  projectEditorForm.routes = [...projectEditorForm.routes, emptyEditorRoute()];
+}
+
+function removeEditorRoute(index: number) {
+  projectEditorForm.routes = projectEditorForm.routes.filter((_, i) => i !== index);
 }
 
 function openCreateProject() {
@@ -1435,8 +1455,22 @@ function openEditProject(projectId: string) {
   editingProjectId.value = project.id;
   projectEditorTab.value = '微信群';
   projectEditorForm.name = project.name;
-  projectEditorForm.route = project.route;
   projectEditorForm.customer = project.route.match(/客户：([^｜]+)/)?.[1] ?? '';
+  // 业务说明：取 route 里线路段之外的描述；线路改为读取已配置的结构化线路
+  projectEditorForm.description = project.route.replace(/客户：[^｜]+｜?/, '').replace(/线路：[^｜]*/, '').replace(/^｜|｜$/g, '');
+  projectEditorForm.routes = projectRoutes.value
+    .filter((route) => route.projectId === project.id)
+    .map((route) => ({
+      name: route.name,
+      shipperAliasesText: route.shipperAliases.join('、'),
+      receiverAliasesText: route.receiverAliases.join('、'),
+      taxableUnitPrice: baseValuesForProject(project.id, route.name).taxableUnitPrice,
+      driverSalary: baseValuesForProject(project.id, route.name).driverSalary
+    }));
+  if (!projectEditorForm.routes.length) projectEditorForm.routes = [emptyEditorRoute()];
+  const projectBase = baseValuesForProject(project.id);
+  projectEditorForm.cargoInsurance = projectBase.cargoInsurance;
+  projectEditorForm.taxRatePercent = Number((projectBase.taxRate * 100).toFixed(2));
   projectEditorForm.ownerIds = [...(sourceConfig.ownerIds ?? [])];
   projectEditorForm.tmsEmployeeIds = [...sourceConfig.tmsEmployeeIds];
   projectEditorForm.wechatEmployeeIds = [...sourceConfig.wechatEmployeeIds];
@@ -1469,17 +1503,92 @@ function toggleProjectSkill(skillId: string) {
   projectEditorForm.skillIds = [...projectEditorForm.skillIds, skillId];
 }
 
+// 把结构化线路 + 业务说明拼回 Project.route（列表/侧栏仍按这个字段展示）
+function composeProjectRoute(customer: string, routes: ProjectEditorRoute[], description: string) {
+  const parts: string[] = [];
+  if (customer) parts.push(`客户：${customer}`);
+  const names = routes.map((route) => route.name.trim()).filter(Boolean);
+  if (names.length) parts.push(`线路：${names.join('、')}`);
+  if (description) parts.push(description);
+  return parts.join('｜');
+}
+
+// 把编辑器里的线路写入 projectRoutes 与线路计价
+function persistEditorRoutes(projectId: string) {
+  const valid = projectEditorForm.routes
+    .map((route) => ({
+      name: route.name.trim(),
+      shipperAliases: splitAliases(route.shipperAliasesText),
+      receiverAliases: splitAliases(route.receiverAliasesText),
+      taxableUnitPrice: Number(route.taxableUnitPrice) || defaultBaseValues.taxableUnitPrice,
+      driverSalary: Number(route.driverSalary) || 0
+    }))
+    .filter((route) => route.name && route.shipperAliases.length && route.receiverAliases.length);
+
+  // 该项目下整体重建，避免编辑时残留已删除的线路
+  projectRoutes.value = [
+    ...projectRoutes.value.filter((route) => route.projectId !== projectId),
+    ...valid.map((route, index) => ({
+      id: `pr-${projectId}-${index}`,
+      projectId,
+      name: route.name,
+      shipperAliases: route.shipperAliases,
+      receiverAliases: route.receiverAliases,
+      enabled: true
+    }))
+  ];
+
+  const nextPricing = { ...routeBaseValues.value };
+  valid.forEach((route) => {
+    nextPricing[`${projectId}::${route.name}`] = {
+      taxableUnitPrice: route.taxableUnitPrice,
+      driverSalary: route.driverSalary
+    };
+  });
+  routeBaseValues.value = nextPricing;
+  return valid.length;
+}
+
+// 项目级计价参数（货物险、税点）写入
+function persistProjectBaseValues(projectId: string) {
+  const existing = projectBaseValues.value[projectId] ?? {
+    cargoInsurance: defaultBaseValues.cargoInsurance,
+    taxRate: defaultBaseValues.taxRate,
+    defaultTaxableUnitPrice: defaultBaseValues.taxableUnitPrice,
+    defaultDriverSalary: defaultBaseValues.driverSalary
+  };
+  projectBaseValues.value = {
+    ...projectBaseValues.value,
+    [projectId]: {
+      ...existing,
+      cargoInsurance: Number(projectEditorForm.cargoInsurance) || 0,
+      taxRate: (Number(projectEditorForm.taxRatePercent) || 0) / 100
+    }
+  };
+}
+
 function saveProjectEditor() {
   const name = projectEditorForm.name.trim();
-  const route = projectEditorForm.route.trim();
+  const customer = projectEditorForm.customer.trim();
+  const description = projectEditorForm.description.trim();
+  const namedRoutes = projectEditorForm.routes.filter((route) => route.name.trim());
   if (!name) {
     message.warning('请输入项目 / 车队名称');
     return;
   }
-  if (!route) {
-    message.warning('请输入项目线路或业务说明');
+  if (!namedRoutes.length && !description) {
+    message.warning('请至少配置一条项目线路，或填写业务说明');
     return;
   }
+  // 线路填了名称就必须把发/收货单位补全，否则磅单匹配不到
+  const incomplete = namedRoutes.find(
+    (route) => !splitAliases(route.shipperAliasesText).length || !splitAliases(route.receiverAliasesText).length
+  );
+  if (incomplete) {
+    message.warning(`线路「${incomplete.name.trim()}」需要填写发货单位与收货单位`);
+    return;
+  }
+  const route = composeProjectRoute(customer, projectEditorForm.routes, description);
 
   if (projectEditorMode.value === 'edit') {
     const projectId = editingProjectId.value;
@@ -1493,7 +1602,9 @@ function saveProjectEditor() {
         ownerIds: [...projectEditorForm.ownerIds]
       }
     };
-    message.success('项目 / 车队配置已保存');
+    persistProjectBaseValues(projectId);
+    const count = persistEditorRoutes(projectId);
+    message.success(count ? `项目 / 车队配置已保存，${count} 条线路已生效` : '项目 / 车队配置已保存');
     closeProjectEditor();
     return;
   }
@@ -1520,17 +1631,10 @@ function saveProjectEditor() {
       ownerIds: [...projectEditorForm.ownerIds]
     }
   };
-  projectBaseValues.value = {
-    ...projectBaseValues.value,
-    [newProjectId]: {
-      cargoInsurance: defaultBaseValues.cargoInsurance,
-      taxRate: defaultBaseValues.taxRate,
-      defaultTaxableUnitPrice: defaultBaseValues.taxableUnitPrice,
-      defaultDriverSalary: defaultBaseValues.driverSalary
-    }
-  };
+  persistProjectBaseValues(newProjectId);
+  const count = persistEditorRoutes(newProjectId);
   selectedProjectId.value = newProjectId;
-  message.success('新项目 / 车队已创建');
+  message.success(count ? `新项目 / 车队已创建，${count} 条线路已配置` : '新项目 / 车队已创建');
   closeProjectEditor();
 }
 
@@ -1862,16 +1966,6 @@ function updateWeighValue(key: string, value: string) {
   });
 }
 
-function updateBaseValueDraft(key: keyof BaseValuesDraft, value: unknown) {
-  if (key === 'routeKey') return;
-  baseValuesDraft[key] = Number(value) || 0;
-}
-
-// 某线路是否已配置过（用于下拉标记，已配置的可再次选择修改）
-function isRouteConfigured(routeKey: string) {
-  return Boolean(routeBaseValues.value[`${selectedProjectId.value}::${routeKey}`]);
-}
-
 // 当前项目已配置过的线路清单（可查看/点击载入修改）
 const configuredRouteList = computed(() => {
   const prefix = `${selectedProjectId.value}::`;
@@ -1883,108 +1977,6 @@ const configuredRouteList = computed(() => {
       driverSalary: value.driverSalary
     }));
 });
-
-// 切换线路时载入该线路的含税单价/司机工资（已配置则读记录，未配置读项目默认）
-function onBaseValuesRouteChange(routeKey: string) {
-  baseValuesDraft.routeKey = routeKey;
-  const values = baseValuesForProject(selectedProjectId.value, routeKey);
-  baseValuesDraft.taxableUnitPrice = values.taxableUnitPrice;
-  baseValuesDraft.driverSalary = values.driverSalary;
-}
-
-// 项目线路管理
-const routeManageProject = computed(() => projects.find((project) => project.id === routeManageProjectId.value));
-const routeManageRoutes = computed(() => projectRoutes.value.filter((route) => route.projectId === routeManageProjectId.value));
-
-function openRouteManage(projectId: string) {
-  routeManageProjectId.value = projectId;
-  routeManageForm.name = '';
-  routeManageForm.shipperAliasesText = '';
-  routeManageForm.receiverAliasesText = '';
-  routeManageVisible.value = true;
-}
-
-function splitAliases(text: string) {
-  return text
-    .split(/[、,，;；\n]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function saveRouteMapping() {
-  const name = routeManageForm.name.trim();
-  const shipperAliases = splitAliases(routeManageForm.shipperAliasesText);
-  const receiverAliases = splitAliases(routeManageForm.receiverAliasesText);
-  if (!name || !shipperAliases.length || !receiverAliases.length) {
-    message.error('线路名称、发货单位、收货单位都需要填写');
-    return;
-  }
-  if (routeManageRoutes.value.some((route) => route.name === name)) {
-    message.error(`线路「${name}」已存在，可删除后重建`);
-    return;
-  }
-  addProjectRoute({ projectId: routeManageProjectId.value, name, shipperAliases, receiverAliases });
-  routeManageForm.name = '';
-  routeManageForm.shipperAliasesText = '';
-  routeManageForm.receiverAliasesText = '';
-  message.success(`已新增线路「${name}」，匹配到的磅单将自动回填该线路`);
-}
-
-function toggleProjectRoute(routeId: string) {
-  const route = projectRoutes.value.find((item) => item.id === routeId);
-  if (!route) return;
-  route.enabled = !route.enabled;
-  message.success(`线路「${route.name}」已${route.enabled ? '启用' : '停用'}`);
-}
-
-function deleteProjectRoute(routeId: string) {
-  const route = projectRoutes.value.find((item) => item.id === routeId);
-  if (!route) return;
-  removeProjectRoute(routeId);
-  message.success(`已删除线路「${route.name}」`);
-}
-
-function openBaseValuesModal() {
-  const firstRoute = weighRouteOptions.value[0]?.value ?? '';
-  baseValuesDraft.routeKey = firstRoute;
-  const values = baseValuesForProject(selectedProjectId.value, firstRoute);
-  baseValuesDraft.taxableUnitPrice = values.taxableUnitPrice;
-  baseValuesDraft.driverSalary = values.driverSalary;
-  baseValuesDraft.cargoInsurance = values.cargoInsurance;
-  baseValuesDraft.taxRatePercent = Number((values.taxRate * 100).toFixed(2));
-  baseValuesModalVisible.value = true;
-}
-
-function saveBaseValues() {
-  const projectId = selectedProjectId.value;
-  // 货物险、税点：项目级统一
-  const project = projectBaseValues.value[projectId] ?? {
-    cargoInsurance: defaultBaseValues.cargoInsurance,
-    taxRate: defaultBaseValues.taxRate,
-    defaultTaxableUnitPrice: defaultBaseValues.taxableUnitPrice,
-    defaultDriverSalary: defaultBaseValues.driverSalary
-  };
-  projectBaseValues.value = {
-    ...projectBaseValues.value,
-    [projectId]: {
-      ...project,
-      cargoInsurance: Number(baseValuesDraft.cargoInsurance) || 0,
-      taxRate: (Number(baseValuesDraft.taxRatePercent) || 0) / 100
-    }
-  };
-  // 含税单价、司机工资：当前选中线路级写入（已配置则覆盖修改）
-  if (baseValuesDraft.routeKey) {
-    routeBaseValues.value = {
-      ...routeBaseValues.value,
-      [`${projectId}::${baseValuesDraft.routeKey}`]: {
-        taxableUnitPrice: Number(baseValuesDraft.taxableUnitPrice) || defaultBaseValues.taxableUnitPrice,
-        driverSalary: Number(baseValuesDraft.driverSalary) || 0
-      }
-    };
-  }
-  baseValuesModalVisible.value = false;
-  message.success(`${currentProject.value.name} · ${baseValuesDraft.routeKey || '默认'} 基本数值已更新`);
-}
 
 function onWeighInput(key: string, value: unknown) {
   updateWeighValue(key, String(value));
@@ -3004,8 +2996,7 @@ onBeforeUnmount(() => {
             <span>含税单价、司机工资按线路分别配置</span>
             <b class="configured-count">已配置线路 {{ configuredRouteList.length }} / {{ weighRouteOptions.length }} 条</b>
             <span>含税产值 = 卸货吨位 × 含税单价；利润 = 含税产值 - 货物险 - 司机工资 - 税点</span>
-            <a-button size="small" @click="openRouteManage(selectedProjectId)">线路管理</a-button>
-            <a-button size="small" @click="openBaseValuesModal">按线路配置</a-button>
+            <span>线路与计价在「项目 / 车队管理 → 编辑」中配置</span>
           </div>
           <div class="filter-bar filter-bar-wide">
             <a-range-picker v-model:value="weighDateRange" value-format="YYYY-MM-DD" />
@@ -3540,7 +3531,6 @@ onBeforeUnmount(() => {
                             <template #icon><EditOutlined /></template>
                             编辑
                           </a-button>
-                          <a-button size="small" @click.stop="openRouteManage(project.id)">线路管理</a-button>
                           <a-button size="small" @click.stop="openProjectWorkbench(project.id)">工作台</a-button>
                         </div>
                       </td>
@@ -3590,13 +3580,69 @@ onBeforeUnmount(() => {
                       </a-select>
                     </label>
                     <label class="wide">
-                      <span>项目线路 / 业务说明</span>
+                      <span>业务说明<i>选填，展示在项目列表</i></span>
                       <a-textarea
-                        v-model:value="projectEditorForm.route"
+                        v-model:value="projectEditorForm.description"
                         :auto-size="{ minRows: 2, maxRows: 4 }"
-                        placeholder="例如：客户：广西德保电厂｜线路：砚山储配站→广西德保电厂、砚山储配站→靖西中转库"
+                        placeholder="例如：月结客户，重点保障德保电厂到货时效"
                       />
                     </label>
+                  </div>
+
+                  <div class="editor-route-section">
+                    <div class="editor-route-head">
+                      <div>
+                        <strong>项目线路与计价</strong>
+                        <span>磅单按发 / 收货单位双端命中自动回填线路，并按该线路的含税单价与司机工资计算利润</span>
+                      </div>
+                      <a-button size="small" @click="addEditorRoute">
+                        <template #icon><PlusOutlined /></template>
+                        添加线路
+                      </a-button>
+                    </div>
+
+                    <div class="editor-project-base">
+                      <span class="editor-project-base-title">项目级参数（所有线路统一）</span>
+                      <label>
+                        <span>货物险</span>
+                        <a-input-number v-model:value="projectEditorForm.cargoInsurance" :min="0" :precision="2" addon-after="元/趟" />
+                      </label>
+                      <label>
+                        <span>税点</span>
+                        <a-input-number v-model:value="projectEditorForm.taxRatePercent" :min="0" :max="100" :precision="2" addon-after="%" />
+                      </label>
+                      <em>含税产值 = 卸货吨位 × 含税单价；利润 = 含税产值 − 货物险 − 司机工资 − 税点</em>
+                    </div>
+                    <div v-for="(route, index) in projectEditorForm.routes" :key="index" class="editor-route-card">
+                      <div class="editor-route-grid">
+                        <label>
+                          <span>线路名称</span>
+                          <a-input v-model:value="route.name" placeholder="如 北京-上海" />
+                        </label>
+                        <label>
+                          <span>含税单价</span>
+                          <a-input-number v-model:value="route.taxableUnitPrice" :min="0" :precision="2" addon-after="元/吨" style="width:100%" />
+                        </label>
+                        <label>
+                          <span>司机工资</span>
+                          <a-input-number v-model:value="route.driverSalary" :min="0" :precision="2" addon-after="元/趟" style="width:100%" />
+                        </label>
+                        <button type="button" class="editor-route-remove" title="删除该线路" @click="removeEditorRoute(index)">
+                          <CloseOutlined />
+                        </button>
+                      </div>
+                      <div class="editor-route-grid two">
+                        <label>
+                          <span>发货单位<i>多个写法用顿号或逗号分隔</i></span>
+                          <a-textarea v-model:value="route.shipperAliasesText" :rows="1" :auto-size="{ minRows: 1, maxRows: 3 }" placeholder="如 北京科技有限公司、北京科技公司" />
+                        </label>
+                        <label>
+                          <span>收货单位<i>多个写法用顿号或逗号分隔</i></span>
+                          <a-textarea v-model:value="route.receiverAliasesText" :rows="1" :auto-size="{ minRows: 1, maxRows: 3 }" placeholder="如 上海物流公司" />
+                        </label>
+                      </div>
+                    </div>
+                    <p v-if="!projectEditorForm.routes.length" class="muted">还没有线路，点击右上角添加。</p>
                   </div>
                 </section>
 
@@ -3914,105 +3960,5 @@ onBeforeUnmount(() => {
       <p class="weigh-edit-tip">补录后按当前项目「装货地点 → 卸货地点」线路单价自动计算含税产值、税点与利润。</p>
     </a-modal>
 
-    <a-modal v-model:open="routeManageVisible" title="项目线路管理" width="720px" :footer="null">
-      <div class="route-manage">
-        <p class="route-manage-tip">
-          为 <b>{{ routeManageProject?.name ?? '当前项目' }}</b> 配置线路，并声明发货单位 / 收货单位在磅单上可能出现的各种写法。
-          磅单审核时<b>发货与收货双端都命中</b>才自动回填线路；只命中一边或都未命中则留空并标疑点。回填后的线路名同时作为「按线路配置」单价与司机工资的口径。
-        </p>
-
-        <div class="route-manage-form">
-          <label>
-            <span>线路名称</span>
-            <a-input v-model:value="routeManageForm.name" placeholder="如 北京-上海" />
-          </label>
-          <label>
-            <span>发货单位<i>多个写法用顿号或逗号分隔</i></span>
-            <a-textarea v-model:value="routeManageForm.shipperAliasesText" :rows="2" placeholder="如 北京科技有限公司、北京科技公司" />
-          </label>
-          <label>
-            <span>收货单位<i>多个写法用顿号或逗号分隔</i></span>
-            <a-textarea v-model:value="routeManageForm.receiverAliasesText" :rows="2" placeholder="如 上海物流公司、上海物流有限公司" />
-          </label>
-          <a-button type="primary" @click="saveRouteMapping">
-            <template #icon><PlusOutlined /></template>
-            新增线路
-          </a-button>
-        </div>
-
-        <div class="route-manage-list">
-          <div v-for="route in routeManageRoutes" :key="route.id" class="route-manage-item" :class="{ disabled: !route.enabled }">
-            <div class="route-manage-name">
-              <strong>{{ route.name }}</strong>
-              <a-tag :color="route.enabled ? 'green' : 'default'">{{ route.enabled ? '启用' : '停用' }}</a-tag>
-            </div>
-            <div class="route-manage-alias">
-              <span>发货</span>
-              <a-tag v-for="alias in route.shipperAliases" :key="alias" color="blue">{{ alias }}</a-tag>
-            </div>
-            <div class="route-manage-alias">
-              <span>收货</span>
-              <a-tag v-for="alias in route.receiverAliases" :key="alias" color="cyan">{{ alias }}</a-tag>
-            </div>
-            <div class="route-manage-actions">
-              <a-switch :checked="route.enabled" size="small" @change="toggleProjectRoute(route.id)" />
-              <a-button size="small" danger @click="deleteProjectRoute(route.id)">删除</a-button>
-            </div>
-          </div>
-          <p v-if="!routeManageRoutes.length" class="muted">该项目还没有配置线路，填写上方表单新增。</p>
-        </div>
-      </div>
-    </a-modal>
-
-    <a-modal v-model:open="baseValuesModalVisible" title="按线路配置基本数值" width="520px" ok-text="保存" cancel-text="取消" @ok="saveBaseValues">
-      <div class="base-values-modal">
-        <label class="base-route-label">
-          <span>选择线路</span>
-          <a-select :value="baseValuesDraft.routeKey" @change="onBaseValuesRouteChange">
-            <a-select-option v-for="route in weighRouteOptions" :key="route.value" :value="route.value">
-              <span class="route-option">
-                <span class="route-option-name">{{ route.label }}</span>
-                <a-tag :color="isRouteConfigured(route.value) ? 'green' : 'default'" class="route-option-tag">
-                  {{ isRouteConfigured(route.value) ? '已配置' : '未配置' }}
-                </a-tag>
-              </span>
-            </a-select-option>
-          </a-select>
-        </label>
-        <div class="base-section-title">线路级（各线路不同）</div>
-        <label>
-          <span>含税单价</span>
-          <a-input-number :value="baseValuesDraft.taxableUnitPrice" :min="0" :precision="2" addon-after="元/吨" @update:value="updateBaseValueDraft('taxableUnitPrice', $event)" />
-        </label>
-        <label>
-          <span>司机工资</span>
-          <a-input-number :value="baseValuesDraft.driverSalary" :min="0" :precision="2" addon-after="元/趟" @update:value="updateBaseValueDraft('driverSalary', $event)" />
-        </label>
-        <div class="base-section-title">项目级（所有线路统一）</div>
-        <label>
-          <span>货物险</span>
-          <a-input-number :value="baseValuesDraft.cargoInsurance" :min="0" :precision="2" addon-after="元/趟" @update:value="updateBaseValueDraft('cargoInsurance', $event)" />
-        </label>
-        <label>
-          <span>税点</span>
-          <a-input-number :value="baseValuesDraft.taxRatePercent" :min="0" :max="100" :precision="2" addon-after="%" @update:value="updateBaseValueDraft('taxRatePercent', $event)" />
-        </label>
-
-        <div class="base-section-title">已配置线路 {{ configuredRouteList.length }} 条（点击可查看修改）</div>        <div class="base-configured-list">
-          <button
-            v-for="item in configuredRouteList"
-            :key="item.routeKey"
-            type="button"
-            class="base-configured-row"
-            :class="{ active: baseValuesDraft.routeKey === item.routeKey }"
-            @click="onBaseValuesRouteChange(item.routeKey)"
-          >
-            <span class="base-configured-name" :title="item.routeKey">{{ item.routeKey }}</span>
-            <em>含税单价 {{ item.taxableUnitPrice }} 元/吨 · 司机工资 {{ item.driverSalary }} 元/趟</em>
-          </button>
-          <p v-if="!configuredRouteList.length" class="muted">暂无已配置线路，选择上方线路填写后保存即可。</p>
-        </div>
-      </div>
-    </a-modal>
   </a-config-provider>
 </template>
