@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { DownloadOutlined, ImportOutlined, PlusOutlined, SearchOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons-vue';
 import { Modal, message } from 'ant-design-vue';
 import type { ChargingRecord, RecordDataSource } from './types';
 import ImportReviewModal, { type ImportColumn } from './ImportReviewModal.vue';
+import ImportSourceModal from './ImportSourceModal.vue';
+import TableColumnSettings from './TableColumnSettings.vue';
 
 const DEFAULT_CAPACITY = 430;
 
 const sourceLabels: Record<RecordDataSource, string> = {
-  payment_sync: '付款明细同步',
-  upstream_import: '批量导入',
+  payment_sync: '自动同步',
+  upstream_import: '导入数据',
   manual: '手动添加',
-  wechat_robot: '微信机器人',
-  table_import: '批量导入',
-  image_ocr: '图片识别'
+  wechat_robot: '自动同步',
+  table_import: '导入数据',
+  image_ocr: '导入数据'
 };
 
 // 0.1 版本：暂不支持自动计算，仅保存原始录入字段
@@ -73,7 +75,7 @@ const records = ref<ChargingRecord[]>(seed.map(make));
 
 const dateRange = ref<string[]>([]);
 const keyword = ref('');
-const sourceFilter = ref<'全部' | RecordDataSource>('全部');
+const sourceFilter = ref<'全部' | 'import' | 'sync' | 'manual'>('全部');
 const selectedRowKeys = ref<string[]>([]);
 const editingId = ref('');
 const editDraft = reactive<Record<string, any>>({});
@@ -83,7 +85,8 @@ const filtered = computed(() =>
     const inDate = dateRange.value.length !== 2 || (r.date >= dateRange.value[0] && r.date <= dateRange.value[1]);
     const kw = keyword.value.trim();
     const inKw = !kw || [r.vehiclePlate, r.chargingStation, r.remark].some((v) => (v ?? '').includes(kw));
-    const inSource = sourceFilter.value === '全部' || r.dataSource === sourceFilter.value;
+    const sourceGroup = ['table_import', 'image_ocr', 'upstream_import'].includes(r.dataSource) ? 'import' : r.dataSource === 'manual' ? 'manual' : 'sync';
+    const inSource = sourceFilter.value === '全部' || sourceGroup === sourceFilter.value;
     return inDate && inKw && inSource;
   })
 );
@@ -102,7 +105,7 @@ const stats = computed(() => {
   };
 });
 
-const columns = [
+const baseColumns = [
   { title: '日期', dataIndex: 'date', width: 96, sorter: (a: ChargingRecord, b: ChargingRecord) => a.date.localeCompare(b.date) },
   { title: '车牌', dataIndex: 'vehiclePlate', width: 96 },
   { title: '来源', dataIndex: 'source', width: 118 },
@@ -120,6 +123,10 @@ const columns = [
   { title: '备注', dataIndex: 'remark', width: 160 },
   { title: '操作', dataIndex: 'action', fixed: 'right', width: 120 }
 ];
+const defaultFieldKeys = baseColumns.filter((column) => column.dataIndex !== 'action').map((column) => column.dataIndex);
+const fieldKeys = ref<string[]>(JSON.parse(localStorage.getItem('charging-table-columns') || 'null') || defaultFieldKeys);
+watch(fieldKeys, (value) => localStorage.setItem('charging-table-columns', JSON.stringify(value)), { deep: true });
+const columns = computed(() => [...fieldKeys.value.map((key) => baseColumns.find((column) => column.dataIndex === key)).filter(Boolean), baseColumns.find((column) => column.dataIndex === 'action')]);
 
 function dt(v: string) {
   const [, m, d] = v.split('-');
@@ -185,6 +192,10 @@ function exportRows() {
 }
 // 上游表格导入：选文件 → 列名自动匹配预览 → 异常行标红补全 → 确认导入
 const tableImportVisible = ref(false);
+const importSourceVisible = ref(false);
+const tableFileInput = ref<HTMLInputElement | null>(null);
+const receiptFileInput = ref<HTMLInputElement | null>(null);
+const importFileName = ref('充电流水_上游系统_202606.xlsx');
 const tableImportColumns: ImportColumn[] = [
   { key: 'date', label: '日期', sourceNames: ['充电日期'], required: true },
   { key: 'vehiclePlate', label: '车牌号', sourceNames: ['车牌'], required: true },
@@ -201,8 +212,18 @@ const tableImportRows = [
   { date: '2026-06-28', vehiclePlate: '粤B98790D', chargingKwh: null, unitPrice: 0.9, serviceFee: 30, totalAmount: null, chargingStation: '田东服务区充电站' }
 ];
 function importUpstream() {
+  tableFileInput.value?.click();
+}
+function selectImportSource(source: 'table' | 'receipt') { source === 'table' ? importUpstream() : receiptFileInput.value?.click(); }
+function openImportReview(file: File, receipt = false) {
+  const max = receipt ? 20 : 10;
+  if (file.size > max * 1024 * 1024) { message.error(`文件不能超过 ${max} MB`); return; }
+  importFileName.value = file.name;
+  message.success(receipt ? `已识别 ${file.name}，请核对充电字段` : `已读取 ${file.name}，请核对字段映射与异常数据`);
   tableImportVisible.value = true;
 }
+function onTableFile(event: Event) { const file = (event.target as HTMLInputElement).files?.[0]; (event.target as HTMLInputElement).value = ''; if (!file) return; if (!/\.(xlsx|xls|csv)$/i.test(file.name)) { message.error('请选择 XLSX、XLS 或 CSV 文件'); return; } openImportReview(file); }
+function onReceiptFile(event: Event) { const file = (event.target as HTMLInputElement).files?.[0]; (event.target as HTMLInputElement).value = ''; if (!file) return; if (!file.type.startsWith('image/') && file.type !== 'application/pdf' && !/\.(pdf|png|jpe?g|webp)$/i.test(file.name)) { message.error('请选择 PDF、JPG、PNG 或 WEBP 文件'); return; } openImportReview(file, true); }
 function confirmTableImport(rows: Array<Record<string, string | number | null>>) {
   const added = rows.map((row) =>
     make({
@@ -244,8 +265,11 @@ function saveAdd() {
     <div class="page-toolbar">
       <h2>充电明细</h2>
       <div class="toolbar-actions">
-        <a-button @click="importUpstream"><template #icon><ImportOutlined /></template>导入上游系统表格</a-button>
+        <input ref="tableFileInput" class="hidden-file-input" type="file" accept=".xlsx,.xls,.csv" @change="onTableFile" />
+        <input ref="receiptFileInput" class="hidden-file-input" type="file" accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" @change="onReceiptFile" />
+        <a-button @click="importSourceVisible = true"><template #icon><ImportOutlined /></template>导入数据</a-button>
         <a-button @click="openAdd"><template #icon><PlusOutlined /></template>手动添加</a-button>
+        <TableColumnSettings v-model="fieldKeys" :columns="baseColumns" />
         <a-button @click="exportRows"><template #icon><DownloadOutlined /></template>导出</a-button>
       </div>
     </div>
@@ -265,9 +289,9 @@ function saveAdd() {
       </a-input>
       <a-select v-model:value="sourceFilter" style="width: 100%">
         <a-select-option value="全部">全部来源</a-select-option>
-        <a-select-option value="table_import">批量导入</a-select-option>
+        <a-select-option value="import">导入数据</a-select-option>
         <a-select-option value="manual">手动添加</a-select-option>
-        <a-select-option value="payment_sync">付款明细同步</a-select-option>
+        <a-select-option value="sync">自动同步</a-select-option>
       </a-select>
     </div>
 
@@ -330,11 +354,12 @@ function saveAdd() {
     <ImportReviewModal
       v-model:open="tableImportVisible"
       title="导入上游系统表格 · 审核后导入"
-      file-name="充电流水_上游系统_202606.xlsx"
+      :file-name="importFileName"
       :columns="tableImportColumns"
       :sample-rows="tableImportRows"
       @confirm="confirmTableImport"
     />
+    <ImportSourceModal v-model:open="importSourceVisible" entity="充电明细" receipt-hint="识别充电账单、桩站截图或对账 PDF" @select="selectImportSource" />
   </section>
 </template>
 
@@ -345,6 +370,7 @@ function saveAdd() {
   justify-content: space-between;
   margin-bottom: 12px;
 }
+.hidden-file-input { display:none; }
 .page-toolbar h2 {
   margin: 0;
   font-size: 18px;

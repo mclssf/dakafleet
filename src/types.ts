@@ -110,7 +110,9 @@ export type PageKey =
   | 'vehicleDetail'
   | 'projects'
   | 'projectManage'
-  | 'agentOps';
+  | 'agentOps'
+  | 'importList'
+  | 'exportList';
 
 export type RecordDataSource = 'payment_sync' | 'upstream_import' | 'manual' | 'wechat_robot' | 'table_import' | 'image_ocr';
 

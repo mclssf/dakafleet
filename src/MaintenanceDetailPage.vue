@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
-import { DownloadOutlined, ImportOutlined, PlusOutlined, SearchOutlined, DeleteOutlined, EditOutlined, PictureOutlined, FileImageOutlined } from '@ant-design/icons-vue';
+import { computed, reactive, ref, watch } from 'vue';
+import { DownloadOutlined, ImportOutlined, PlusOutlined, SearchOutlined, DeleteOutlined, EditOutlined, PictureOutlined, FilePdfOutlined, LoadingOutlined } from '@ant-design/icons-vue';
 import { Modal, message } from 'ant-design-vue';
 import type { MaintenanceCategory, MaintenanceRecord, RecordDataSource } from './types';
 import ImportReviewModal, { type ImportColumn } from './ImportReviewModal.vue';
+import ImportSourceModal from './ImportSourceModal.vue';
+import TableColumnSettings from './TableColumnSettings.vue';
 import { expenseImages } from './data';
 
 const categoryOptions: MaintenanceCategory[] = ['维修费-轮胎', '维修费-底盘', '维修费-刹车', '维修费-货箱', '维修费-电路', '维修费-液压', '维修费-电焊', '维修费-大修', '维修费-施救', '维修费-耗材', '维修费-工时', '维修费-其他'];
@@ -82,16 +84,16 @@ const records = ref<MaintenanceRecord[]>(seed.map(make));
 
 const dateRange = ref<string[]>([]);
 const keyword = ref('');
-const sourceFilter = ref<'全部' | 'table_import' | 'manual' | 'payment_sync'>('全部');
+const sourceFilter = ref<'全部' | 'import' | 'sync' | 'manual'>('全部');
 const selectedRowKeys = ref<string[]>([]);
 const editingId = ref('');
 const editDraft = reactive<Record<string, any>>({});
 
 const sourceLabelMap: Record<string, string> = {
-  table_import: '批量导入',
-  image_ocr: '批量导入',
+  table_import: '导入数据',
+  image_ocr: '导入数据',
   manual: '手动添加',
-  payment_sync: '付款明细同步'
+  payment_sync: '自动同步'
 };
 function sourceLabel(r: MaintenanceRecord) {
   return sourceLabelMap[r.dataSource] ?? '手动添加';
@@ -109,7 +111,7 @@ const filtered = computed(() =>
     const inDate = dateRange.value.length !== 2 || (r.date >= dateRange.value[0] && r.date <= dateRange.value[1]);
     const kw = keyword.value.trim();
     const inKw = !kw || [r.vendor, r.vehiclePlate, r.description, r.remark].some((v) => (v ?? '').includes(kw));
-    const src = r.dataSource === 'image_ocr' ? 'table_import' : r.dataSource;
+    const src = ['table_import', 'image_ocr', 'upstream_import'].includes(r.dataSource) ? 'import' : r.dataSource === 'manual' ? 'manual' : 'sync';
     const inSource = sourceFilter.value === '全部' || src === sourceFilter.value;
     return inDate && inKw && inSource;
   })
@@ -128,7 +130,7 @@ const stats = computed(() => {
   };
 });
 
-const columns = [
+const baseColumns = [
   { title: '日期', dataIndex: 'date', width: 96, sorter: (a: MaintenanceRecord, b: MaintenanceRecord) => a.date.localeCompare(b.date) },
   { title: '来源', dataIndex: 'source', width: 110 },
   { title: '对方账户', dataIndex: 'vendor', width: 120 },
@@ -141,6 +143,10 @@ const columns = [
   { title: '凭证', dataIndex: 'images', width: 76 },
   { title: '操作', dataIndex: 'action', fixed: 'right', width: 200 }
 ];
+const defaultFieldKeys = baseColumns.filter((column) => column.dataIndex !== 'action').map((column) => column.dataIndex);
+const fieldKeys = ref<string[]>(JSON.parse(localStorage.getItem('maintenance-table-columns') || 'null') || defaultFieldKeys);
+watch(fieldKeys, (value) => localStorage.setItem('maintenance-table-columns', JSON.stringify(value)), { deep: true });
+const columns = computed(() => [...fieldKeys.value.map((key) => baseColumns.find((column) => column.dataIndex === key)).filter(Boolean), baseColumns.find((column) => column.dataIndex === 'action')]);
 
 function dt(v: string) {
   const [, m, d] = v.split('-');
@@ -222,6 +228,15 @@ function exportRows() {
 }
 // 表格导入：选文件 → 列名自动匹配预览 → 异常行标红补全 → 确认导入
 const tableImportVisible = ref(false);
+const importSourceVisible = ref(false);
+const tableFileInput = ref<HTMLInputElement | null>(null);
+const tableImportFileName = ref('定点维修明细_202606.xlsx');
+const receiptFileInput = ref<HTMLInputElement | null>(null);
+const pdfImportVisible = ref(false);
+const pdfParsing = ref(false);
+const pdfFileName = ref('');
+const pdfPages = ref<Record<string, any>[]>([]);
+const pdfSelectedPages = ref<number[]>([]);
 const tableImportColumns: ImportColumn[] = [
   { key: 'date', label: '日期', sourceNames: ['维修日期'], required: true },
   { key: 'vendor', label: '对方账户', sourceNames: ['维修厂家'] },
@@ -237,6 +252,17 @@ const tableImportRows = [
   { date: '2026-06-27', vendor: '高速汽配', vehiclePlate: '赣J05612D', description: '', amount: null, remark: '单据模糊待补' }
 ];
 function importTable() {
+  tableFileInput.value?.click();
+}
+function selectImportSource(source: 'table' | 'receipt') { source === 'table' ? importTable() : importImage(); }
+function onTableFile(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  (event.target as HTMLInputElement).value = '';
+  if (!file) return;
+  if (!/\.(xlsx|xls|csv)$/i.test(file.name)) { message.error('请选择 XLSX、XLS 或 CSV 文件'); return; }
+  if (file.size > 10 * 1024 * 1024) { message.error('文件不能超过 10 MB'); return; }
+  tableImportFileName.value = file.name;
+  message.success(`已读取 ${file.name}，正在打开字段审核预览`);
   tableImportVisible.value = true;
 }
 function confirmTableImport(rows: Array<Record<string, string | number | null>>) {
@@ -261,15 +287,53 @@ const importReviewVisible = ref(false);
 const importDrafts = ref<Record<string, any>[]>([]);
 const importSelectedKeys = ref<number[]>([]);
 function importImage() {
-  // Demo：模拟一次批量上传多张定点维修收据的 OCR 识别结果
-  const ocr = [
-    { image: expenseImages[3], date: '2026-06-28', vendor: '高速汽配', vehiclePlate: '赣J0587D', description: '更换刹车片 + 打黄油', amount: 480, remark: 'OCR 识别，请核对' },
-    { image: expenseImages[1], date: '2026-06-28', vendor: '鑫源轮胎', vehiclePlate: '赣J0521D', description: '更换后左轮胎一条', amount: 950, remark: 'OCR 识别，请核对' },
-    { image: expenseImages[4], date: '2026-06-27', vendor: '顺达底盘', vehiclePlate: '赣J0533D', description: '底盘悬挂减震更换', amount: 1680, remark: 'OCR 识别，请核对' }
-  ];
-  importDrafts.value = ocr.map((d, i) => ({ key: i, ...d }));
-  importSelectedKeys.value = importDrafts.value.map((d) => d.key);
-  importReviewVisible.value = true;
+  receiptFileInput.value?.click();
+}
+function onReceiptFile(event: Event) {
+  const files = Array.from((event.target as HTMLInputElement).files ?? []);
+  (event.target as HTMLInputElement).value = '';
+  if (!files.length) return;
+  const pdfFiles = files.filter((file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name));
+  const imageFiles = files.filter((file) => file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(file.name));
+  if (pdfFiles.length && imageFiles.length) { message.warning('PDF 和图片请分开选择导入'); return; }
+  if (!pdfFiles.length && !imageFiles.length) { message.error('请选择 PDF、JPG、PNG 或 WEBP 文件'); return; }
+  if (imageFiles.length) {
+    if (imageFiles.some((file) => file.size > 10 * 1024 * 1024)) { message.error('单张图片不能超过 10 MB'); return; }
+    const samples = [
+      { date: '2026-06-28', vendor: '高速汽配', vehiclePlate: '赣J0587D', description: '更换刹车片 + 打黄油', amount: 480 },
+      { date: '2026-06-28', vendor: '鑫源轮胎', vehiclePlate: '赣J0521D', description: '更换后左轮胎一条', amount: 950 },
+      { date: '2026-06-27', vendor: '顺达底盘', vehiclePlate: '', description: '底盘悬挂减震更换', amount: 1680 }
+    ];
+    importDrafts.value = imageFiles.map((file, index) => ({ key: index, image: URL.createObjectURL(file), fileName: file.name, ...samples[index % samples.length], remark: '图片 OCR 识别，请核对' }));
+    importSelectedKeys.value = importDrafts.value.filter((row) => row.vehiclePlate).map((row) => row.key);
+    importReviewVisible.value = true;
+    return;
+  }
+  const file = pdfFiles[0]!;
+  if (pdfFiles.length > 1) { message.warning('每次只能导入一个 PDF'); return; }
+  if (file.size > 20 * 1024 * 1024) { message.error('PDF 文件不能超过 20 MB'); return; }
+  pdfFileName.value = file.name;
+  pdfParsing.value = true;
+  pdfImportVisible.value = true;
+  pdfPages.value = [];
+  pdfSelectedPages.value = [];
+  window.setTimeout(() => {
+    pdfPages.value = [
+      { key: 1, page: 1, date: '2026-06-30', vendor: '高速汽配', vehiclePlate: '赣J0587D', description: '更换刹车片 + 打黄油', amount: 480, remark: 'PDF 第 1 页' },
+      { key: 2, page: 2, date: '2026-06-29', vendor: '顺达底盘', vehiclePlate: '', description: '前桥球头更换', amount: 1350, remark: '车牌待补' }
+    ];
+    pdfSelectedPages.value = [1];
+    pdfParsing.value = false;
+  }, 700);
+}
+function confirmPdfImport() {
+  const chosen = pdfPages.value.filter((row) => pdfSelectedPages.value.includes(row.key));
+  if (!chosen.length) { message.warning('请至少选择一页'); return; }
+  const invalid = chosen.some((row) => !row.date || !row.vehiclePlate || !row.description || row.amount == null);
+  if (invalid) { message.warning('请补全所选页面的日期、车牌、内容和金额'); return; }
+  records.value = [...chosen.map((row) => make({ ...row, dataSource: 'image_ocr', id: `MT_${Math.round(Math.random() * 1e9)}` })), ...records.value];
+  pdfImportVisible.value = false;
+  message.success(`已从 PDF 导入 ${chosen.length} 条维修记录`);
 }
 function removeImportDraft(key: number) {
   importDrafts.value = importDrafts.value.filter((d) => d.key !== key);
@@ -289,7 +353,7 @@ function confirmImport() {
   }
   const added = chosen.map((d) =>
     make({
-      dataSource: 'table_import',
+      dataSource: 'image_ocr',
       id: `MT_${Math.round(Math.random() * 1e9)}`,
       date: d.date,
       vendor: d.vendor,
@@ -327,9 +391,11 @@ function saveAdd() {
     <div class="page-toolbar">
       <h2>维修费用</h2>
       <div class="toolbar-actions">
-        <a-button @click="importTable"><template #icon><ImportOutlined /></template>导入定点维修表格</a-button>
-        <a-button @click="importImage"><template #icon><FileImageOutlined /></template>批量导入图片</a-button>
+        <input ref="tableFileInput" class="hidden-file-input" type="file" accept=".xlsx,.xls,.csv" @change="onTableFile" />
+        <input ref="receiptFileInput" class="hidden-file-input" type="file" multiple accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" @change="onReceiptFile" />
+        <a-button @click="importSourceVisible = true"><template #icon><ImportOutlined /></template>导入数据</a-button>
         <a-button @click="openAdd"><template #icon><PlusOutlined /></template>手动添加</a-button>
+        <TableColumnSettings v-model="fieldKeys" :columns="baseColumns" />
         <a-button @click="exportRows"><template #icon><DownloadOutlined /></template>导出</a-button>
       </div>
     </div>
@@ -349,9 +415,9 @@ function saveAdd() {
       </a-input>
       <a-select v-model:value="sourceFilter" style="width: 100%">
         <a-select-option value="全部">全部来源</a-select-option>
-        <a-select-option value="table_import">批量导入</a-select-option>
+        <a-select-option value="import">导入数据</a-select-option>
         <a-select-option value="manual">手动添加</a-select-option>
-        <a-select-option value="payment_sync">付款明细同步</a-select-option>
+        <a-select-option value="sync">自动同步</a-select-option>
       </a-select>
     </div>
 
@@ -410,7 +476,7 @@ function saveAdd() {
       <p class="viewer-idx">{{ viewerIndex + 1 }} / {{ viewerImages.length }}</p>
     </a-modal>
 
-    <a-modal v-model:open="importReviewVisible" title="批量图片识别 · 审核后导入" ok-text="批量审核并导入" cancel-text="取消" @ok="confirmImport" width="960px">
+    <a-modal v-model:open="importReviewVisible" title="维修凭证识别 · 审核后导入" ok-text="批量审核并导入" cancel-text="取消" @ok="confirmImport" width="960px">
       <div class="batch-import">
         <p class="batch-import-tip">已识别 {{ importDrafts.length }} 张图片，勾选并核对修改后批量导入（已选 {{ importSelectedKeys.length }} 条）。</p>
         <a-checkbox-group v-model:value="importSelectedKeys" class="batch-import-list">
@@ -418,7 +484,7 @@ function saveAdd() {
             <a-checkbox :value="d.key" class="batch-import-check" />
             <div class="import-image">
               <img :src="d.image" alt="维修收据" />
-              <span>OCR 图片</span>
+              <span>{{ d.fileName || 'OCR 图片' }}</span>
             </div>
             <div class="add-form import-fields">
               <label><span>日期*</span><a-input v-model:value="d.date" /></label>
@@ -449,11 +515,30 @@ function saveAdd() {
     <ImportReviewModal
       v-model:open="tableImportVisible"
       title="导入定点维修表格 · 审核后导入"
-      file-name="定点维修明细_202606.xlsx"
+      :file-name="tableImportFileName"
       :columns="tableImportColumns"
       :sample-rows="tableImportRows"
       @confirm="confirmTableImport"
     />
+    <ImportSourceModal v-model:open="importSourceVisible" entity="维修费用" receipt-hint="识别维修票据、结算单或维修 PDF" @select="selectImportSource" />
+
+    <a-modal v-model:open="pdfImportVisible" title="导入维修 PDF · 逐页审核" width="980px" :footer="pdfParsing ? null : undefined" ok-text="确认导入" cancel-text="取消" @ok="confirmPdfImport">
+      <div v-if="pdfParsing" class="pdf-loading"><LoadingOutlined spin /><strong>正在解析 {{ pdfFileName }}</strong><span>识别页码、车牌、维修内容和金额…</span></div>
+      <div v-else class="pdf-import">
+        <div class="pdf-file-summary"><FilePdfOutlined /><div><strong>{{ pdfFileName }}</strong><span>已识别 {{ pdfPages.length }} 页，勾选需要导入的维修单据</span></div><a-tag color="green">{{ pdfSelectedPages.length }} 页已选</a-tag></div>
+        <div v-for="page in pdfPages" :key="page.key" class="pdf-page-row" :class="{ invalid: !page.vehiclePlate || !page.description || page.amount == null }">
+          <a-checkbox :checked="pdfSelectedPages.includes(page.key)" @update:checked="(checked: boolean) => { pdfSelectedPages = checked ? [...pdfSelectedPages, page.key] : pdfSelectedPages.filter((key) => key !== page.key); }" />
+          <div class="pdf-page-preview"><FilePdfOutlined /><span>第 {{ page.page }} 页</span></div>
+          <div class="add-form import-fields">
+            <label><span>日期*</span><a-input v-model:value="page.date" /></label><label><span>对方账户</span><a-input v-model:value="page.vendor" /></label>
+            <label><span>车牌号*</span><a-input v-model:value="page.vehiclePlate" /></label><label><span>支出金额*</span><a-input-number v-model:value="page.amount" :min="0" style="width:100%" /></label>
+            <label class="wide"><span>内容*</span><a-input v-model:value="page.description" /></label><label class="wide"><span>备注</span><a-input v-model:value="page.remark" /></label>
+          </div>
+          <a-tag :color="page.vehiclePlate && page.description && page.amount != null ? 'green' : 'red'">{{ page.vehiclePlate && page.description && page.amount != null ? '通过' : '待补全' }}</a-tag>
+        </div>
+        <a-empty v-if="!pdfPages.length" description="PDF 未识别到可导入页面" />
+      </div>
+    </a-modal>
   </section>
 </template>
 
@@ -464,6 +549,7 @@ function saveAdd() {
   justify-content: space-between;
   margin-bottom: 12px;
 }
+.hidden-file-input { display: none; }
 .page-toolbar h2 {
   margin: 0;
   font-size: 18px;
@@ -551,6 +637,13 @@ function saveAdd() {
   border-radius: 10px;
   background: #fbfbfb;
 }
+.pdf-loading { min-height: 240px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:#64748b; }
+.pdf-loading :deep(.anticon) { font-size:30px; color:#2563eb; }
+.pdf-file-summary { display:flex; align-items:center; gap:10px; padding:10px 12px; margin-bottom:12px; border:1px solid #fecaca; background:#fff7f7; border-radius:8px; }
+.pdf-file-summary :deep(.anticon) { color:#dc2626; font-size:24px; }
+.pdf-file-summary div { flex:1; }.pdf-file-summary strong,.pdf-file-summary span { display:block; }.pdf-file-summary span { color:#64748b; font-size:12px; margin-top:3px; }
+.pdf-page-row { display:grid; grid-template-columns:24px 130px 1fr auto; gap:12px; align-items:start; padding:12px; border:1px solid #e5e7eb; border-radius:10px; margin-bottom:10px; }
+.pdf-page-row.invalid { background:#fff7f7; border-color:#fecaca; }.pdf-page-preview { height:100%; min-height:100px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; background:#fef2f2; border-radius:6px; color:#dc2626; }.pdf-page-preview :deep(.anticon) { font-size:28px; }
 .batch-import-check {
   margin-top: 6px;
 }

@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
-import { DownloadOutlined, ImportOutlined, PlusOutlined, SearchOutlined, DeleteOutlined, EditOutlined, PictureOutlined, FileImageOutlined } from '@ant-design/icons-vue';
+import { computed, reactive, ref, watch } from 'vue';
+import { DownloadOutlined, ImportOutlined, PlusOutlined, SearchOutlined, DeleteOutlined, EditOutlined, PictureOutlined } from '@ant-design/icons-vue';
 import { Modal, message } from 'ant-design-vue';
 import type { RecordDataSource, TirePosition, TireRecord } from './types';
 import { expenseImages } from './data';
 import ImportReviewModal, { type ImportColumn } from './ImportReviewModal.vue';
+import ImportSourceModal from './ImportSourceModal.vue';
+import TableColumnSettings from './TableColumnSettings.vue';
 
 const positionLabels: Record<string, string> = { FL: '前左', FR: '前右', RL: '后左', RR: '后右', SPARE: '备胎' };
 const positionOptions: { value: Exclude<TirePosition, null>; label: string }[] = [
@@ -58,17 +60,17 @@ const dateRange = ref<string[]>([]);
 const keyword = ref('');
 const posFilter = ref<'全部' | Exclude<TirePosition, null>>('全部');
 const payFilter = ref<'全部' | '已付' | '未付'>('全部');
-const sourceFilter = ref<'全部' | 'table_import' | 'image_ocr' | 'manual' | 'payment_sync'>('全部');
+const sourceFilter = ref<'全部' | 'import' | 'sync' | 'manual'>('全部');
 const selectedRowKeys = ref<string[]>([]);
 const editingId = ref('');
 const editDraft = reactive<Record<string, any>>({});
 
 const sourceLabelMap: Record<string, string> = {
-  table_import: '批量导入',
-  wechat_robot: '批量导入',
-  image_ocr: '图片录入',
+  table_import: '导入数据',
+  wechat_robot: '自动同步',
+  image_ocr: '导入数据',
   manual: '手动添加',
-  payment_sync: '付款明细同步'
+  payment_sync: '自动同步'
 };
 function sourceLabel(r: TireRecord) {
   return sourceLabelMap[r.dataSource] ?? '手动添加';
@@ -85,7 +87,7 @@ const filtered = computed(() =>
     const inPos = posFilter.value === '全部' || r.tirePosition === posFilter.value;
     const paid = r.paymentStatus === '已付';
     const inPay = payFilter.value === '全部' || (payFilter.value === '已付' ? paid : !paid);
-    const src = r.dataSource === 'wechat_robot' ? 'table_import' : r.dataSource;
+    const src = ['table_import', 'image_ocr', 'upstream_import'].includes(r.dataSource) ? 'import' : r.dataSource === 'manual' ? 'manual' : 'sync';
     const inSource = sourceFilter.value === '全部' || src === sourceFilter.value;
     return inDate && inKw && inPos && inPay && inSource;
   })
@@ -106,7 +108,7 @@ const stats = computed(() => {
   };
 });
 
-const columns = [
+const baseColumns = [
   { title: '日期', dataIndex: 'date', width: 96, sorter: (a: TireRecord, b: TireRecord) => a.date.localeCompare(b.date) },
   { title: '来源', dataIndex: 'source', width: 110 },
   { title: '维修厂家', dataIndex: 'vendor', width: 110 },
@@ -124,6 +126,10 @@ const columns = [
   { title: '付款状态', dataIndex: 'paymentStatus', width: 108 },
   { title: '操作', dataIndex: 'action', fixed: 'right', width: 180 }
 ];
+const defaultFieldKeys = baseColumns.filter((column) => column.dataIndex !== 'action').map((column) => column.dataIndex);
+const fieldKeys = ref<string[]>(JSON.parse(localStorage.getItem('tire-table-columns') || 'null') || defaultFieldKeys);
+watch(fieldKeys, (value) => localStorage.setItem('tire-table-columns', JSON.stringify(value)), { deep: true });
+const columns = computed(() => [...fieldKeys.value.map((key) => baseColumns.find((column) => column.dataIndex === key)).filter(Boolean), baseColumns.find((column) => column.dataIndex === 'action')]);
 
 function dt(v: string) {
   const [, m, d] = v.split('-');
@@ -218,6 +224,10 @@ function exportRows() {
 }
 // 表格导入：选文件 → 列名自动匹配预览 → 异常行标红补全 → 确认导入
 const tableImportVisible = ref(false);
+const importSourceVisible = ref(false);
+const tableFileInput = ref<HTMLInputElement | null>(null);
+const receiptFileInput = ref<HTMLInputElement | null>(null);
+const tableImportFileName = ref('轮胎更换明细_202606.xlsx');
 const tableImportColumns: ImportColumn[] = [
   { key: 'date', label: '日期', sourceNames: ['更换日期'], required: true },
   { key: 'vendor', label: '供应商', sourceNames: ['对方账户'] },
@@ -235,7 +245,16 @@ const tableImportRows = [
   { date: '2026-06-27', vendor: '鑫源轮胎', vehiclePlate: '赣J05612D', tirePosition: 'RL', quantity: 2, unitPrice: null, tireNumber: null }
 ];
 function importTable() {
-  tableImportVisible.value = true;
+  tableFileInput.value?.click();
+}
+function selectImportSource(source: 'table' | 'receipt') { source === 'table' ? importTable() : importImage(); }
+function onTableFile(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]; (event.target as HTMLInputElement).value = '';
+  if (!file) return;
+  if (!/\.(xlsx|xls|csv)$/i.test(file.name)) { message.error('请选择 XLSX、XLS 或 CSV 文件'); return; }
+  if (file.size > 10 * 1024 * 1024) { message.error('文件不能超过 10 MB'); return; }
+  tableImportFileName.value = file.name;
+  message.success(`已读取 ${file.name}，请核对字段映射与异常数据`); tableImportVisible.value = true;
 }
 function confirmTableImport(rows: Array<Record<string, string | number | null>>) {
   const added = rows.map((row) =>
@@ -260,12 +279,19 @@ const imageImportVisible = ref(false);
 const imageDrafts = ref<Record<string, any>[]>([]);
 const imageSelectedKeys = ref<number[]>([]);
 function importImage() {
+  receiptFileInput.value?.click();
+}
+function onReceiptFile(event: Event) {
+  const files = Array.from((event.target as HTMLInputElement).files ?? []); (event.target as HTMLInputElement).value = '';
+  if (!files.length) return;
+  if (files.some((file) => !file.type.startsWith('image/') && file.type !== 'application/pdf' && !/\.(pdf|png|jpe?g|webp)$/i.test(file.name))) { message.error('请选择 PDF、JPG、PNG 或 WEBP 文件'); return; }
+  if (files.some((file) => file.size > 20 * 1024 * 1024)) { message.error('单个文件不能超过 20 MB'); return; }
   const ocr = [
     { image: expenseImages[1], date: '2026-06-29', vendor: '鑫源轮胎', vehiclePlate: '赣J05623D', tirePosition: 'FL', quantity: 1, unitPrice: 950, tireNumber: 'LT20260629B', remark: 'OCR 识别，请核对' },
     { image: expenseImages[2], date: '2026-06-28', vendor: '路边轮胎店', vehiclePlate: '赣J05634D', tirePosition: 'RR', quantity: 2, unitPrice: 915, tireNumber: '', remark: 'OCR 识别，胎号未识别请补充' },
     { image: expenseImages[3], date: '2026-06-27', vendor: '李师傅', vehiclePlate: '赣J05645D', tirePosition: 'RL', quantity: 1, unitPrice: 940, tireNumber: 'LT20260627C', remark: 'OCR 识别，请核对' }
   ];
-  imageDrafts.value = ocr.map((d, i) => ({ key: i, ...d }));
+  imageDrafts.value = files.map((file, i) => ({ key: i, ...ocr[i % ocr.length], image: file.type.startsWith('image/') ? URL.createObjectURL(file) : expenseImages[(i + 1) % expenseImages.length], fileName: file.name }));
   imageSelectedKeys.value = imageDrafts.value.map((d) => d.key);
   imageImportVisible.value = true;
 }
@@ -325,9 +351,11 @@ function saveAdd() {
     <div class="page-toolbar">
       <h2>轮胎费用</h2>
       <div class="toolbar-actions">
-        <a-button @click="importTable"><template #icon><ImportOutlined /></template>导入表格</a-button>
-        <a-button @click="importImage"><template #icon><FileImageOutlined /></template>图片录入</a-button>
+        <input ref="tableFileInput" class="hidden-file-input" type="file" accept=".xlsx,.xls,.csv" @change="onTableFile" />
+        <input ref="receiptFileInput" class="hidden-file-input" type="file" multiple accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" @change="onReceiptFile" />
+        <a-button @click="importSourceVisible = true"><template #icon><ImportOutlined /></template>导入数据</a-button>
         <a-button @click="openAdd"><template #icon><PlusOutlined /></template>手动添加</a-button>
+        <TableColumnSettings v-model="fieldKeys" :columns="baseColumns" />
         <a-button @click="exportRows"><template #icon><DownloadOutlined /></template>导出</a-button>
       </div>
     </div>
@@ -347,10 +375,9 @@ function saveAdd() {
       </a-input>
       <a-select v-model:value="sourceFilter" style="width: 100%">
         <a-select-option value="全部">全部来源</a-select-option>
-        <a-select-option value="table_import">批量导入</a-select-option>
-        <a-select-option value="image_ocr">图片录入</a-select-option>
+        <a-select-option value="import">导入数据</a-select-option>
         <a-select-option value="manual">手动添加</a-select-option>
-        <a-select-option value="payment_sync">付款明细同步</a-select-option>
+        <a-select-option value="sync">自动同步</a-select-option>
       </a-select>
       <a-select v-model:value="posFilter" style="width: 100%">
         <a-select-option value="全部">全部位置</a-select-option>
@@ -459,11 +486,12 @@ function saveAdd() {
     <ImportReviewModal
       v-model:open="tableImportVisible"
       title="导入轮胎费用表格 · 审核后导入"
-      file-name="轮胎更换明细_202606.xlsx"
+      :file-name="tableImportFileName"
       :columns="tableImportColumns"
       :sample-rows="tableImportRows"
       @confirm="confirmTableImport"
     />
+    <ImportSourceModal v-model:open="importSourceVisible" entity="轮胎费用" receipt-hint="识别轮胎发票、收据、胎号照片或 PDF" @select="selectImportSource" />
 
     <a-modal v-model:open="imageImportVisible" title="轮胎照片识别 · 审核后导入" ok-text="批量审核并导入" cancel-text="取消" width="960px" @ok="confirmImageImport">
       <div class="batch-import">
@@ -473,7 +501,7 @@ function saveAdd() {
             <a-checkbox :value="d.key" class="batch-import-check" />
             <div class="import-image">
               <img :src="d.image" alt="轮胎凭证" />
-              <span>OCR 图片</span>
+              <span>{{ d.fileName || 'OCR 图片' }}</span>
             </div>
             <div class="add-form import-fields">
               <label><span>日期*</span><a-input v-model:value="d.date" /></label>
@@ -505,6 +533,7 @@ function saveAdd() {
   justify-content: space-between;
   margin-bottom: 12px;
 }
+.hidden-file-input { display:none; }
 .page-toolbar h2 {
   margin: 0;
   font-size: 18px;

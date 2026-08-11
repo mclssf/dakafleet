@@ -29,11 +29,24 @@ const emit = defineEmits<{
 
 const rows = ref<Array<Record<string, string | number | null>>>([]);
 const selectedKeys = ref<number[]>([]);
+const fieldMappings = ref<Record<string, string>>({});
+
+const mappedColumns = computed(() => props.columns.flatMap((sourceColumn) => {
+  const target = props.columns.find((column) => column.key === fieldMappings.value[sourceColumn.key]);
+  return target ? [{ ...target, sourceKey: sourceColumn.key, sourceLabel: sourceColumn.sourceNames[0] }] : [];
+}));
+const mappingIssues = computed(() => {
+  const targets = Object.values(fieldMappings.value).filter(Boolean);
+  const missing = props.columns.filter((column) => column.required && !targets.includes(column.key)).map((column) => column.label);
+  const duplicate = targets.find((key, index) => targets.indexOf(key) !== index);
+  return duplicate ? ['系统字段不能重复映射'] : missing.map((label) => `缺少“${label}”映射`);
+});
 
 watch(
   () => props.open,
   (open) => {
     if (!open) return;
+    fieldMappings.value = Object.fromEntries(props.columns.map((column) => [column.key, column.key]));
     rows.value = props.sampleRows.map((row, index) => ({ ...row, __key: index }));
     // 默认勾选校验通过的行，异常行留给用户修完再勾
     selectedKeys.value = rows.value.filter((row) => !rowIssues(row).length).map((row) => Number(row.__key));
@@ -41,10 +54,10 @@ watch(
 );
 
 function rowIssues(row: Record<string, string | number | null>) {
-  return props.columns
+  return mappedColumns.value
     .filter((column) => column.required)
     .filter((column) => {
-      const value = row[column.key];
+      const value = row[column.sourceKey];
       return value === null || value === undefined || String(value).trim() === '';
     })
     .map((column) => column.label);
@@ -60,8 +73,8 @@ function confirmImport() {
   emit(
     'confirm',
     chosen.map((row) => {
-      const clean = { ...row };
-      delete clean.__key;
+      const clean: Record<string, string | number | null> = {};
+      mappedColumns.value.forEach((column) => { clean[column.key] = row[column.sourceKey] ?? null; });
       return clean;
     })
   );
@@ -70,7 +83,7 @@ function confirmImport() {
 
 const confirmDisabled = computed(() => {
   const chosen = rows.value.filter((row) => selectedKeys.value.includes(Number(row.__key)));
-  return !chosen.length || chosen.some((row) => rowIssues(row).length);
+  return !!mappingIssues.value.length || !chosen.length || chosen.some((row) => rowIssues(row).length);
 });
 </script>
 
@@ -84,6 +97,7 @@ const confirmDisabled = computed(() => {
     @cancel="emit('update:open', false)"
   >
     <div class="table-import">
+      <div class="import-progress"><span class="done">1 选择文件</span><i></i><span class="active">2 映射与校验</span><i></i><span>3 确认导入</span></div>
       <div class="table-import-file">
         <FileExcelOutlined />
         <div>
@@ -97,10 +111,15 @@ const confirmDisabled = computed(() => {
       </div>
 
       <div class="table-import-mapping">
-        <span class="table-import-mapping-title">列名匹配</span>
-        <span v-for="column in columns" :key="column.key" class="table-import-map-chip">
-          {{ column.sourceNames[0] }} → <b>{{ column.label }}</b>
-        </span>
+        <span class="table-import-mapping-title">字段映射</span>
+        <div v-for="sourceColumn in columns" :key="sourceColumn.key" class="table-import-map-row">
+          <span>{{ sourceColumn.sourceNames[0] }}</span><b>→</b>
+          <a-select v-model:value="fieldMappings[sourceColumn.key]" size="small" style="width: 132px">
+            <a-select-option value="">不导入</a-select-option>
+            <a-select-option v-for="target in columns" :key="target.key" :value="target.key">{{ target.label }}{{ target.required ? ' *' : '' }}</a-select-option>
+          </a-select>
+        </div>
+        <a-alert v-if="mappingIssues.length" type="error" show-icon :message="mappingIssues.join('；')" />
       </div>
 
       <div class="table-import-grid-wrap">
@@ -108,7 +127,7 @@ const confirmDisabled = computed(() => {
           <thead>
             <tr>
               <th class="check-col"></th>
-              <th v-for="column in columns" :key="column.key">
+              <th v-for="column in mappedColumns" :key="column.sourceKey">
                 {{ column.label }}<i v-if="column.required">*</i>
               </th>
               <th>校验</th>
@@ -127,19 +146,19 @@ const confirmDisabled = computed(() => {
                   }"
                 />
               </td>
-              <td v-for="column in columns" :key="column.key">
+              <td v-for="column in mappedColumns" :key="column.sourceKey">
                 <a-input-number
                   v-if="column.type === 'number'"
-                  :value="row[column.key] === null ? undefined : Number(row[column.key])"
+                  :value="row[column.sourceKey] === null ? undefined : Number(row[column.sourceKey])"
                   size="small"
                   style="width: 100%"
-                  @update:value="(value: number | null) => { row[column.key] = value; if (!rowIssues(row).length && !selectedKeys.includes(Number(row.__key))) selectedKeys = [...selectedKeys, Number(row.__key)]; }"
+                  @update:value="(value: number | null) => { row[column.sourceKey] = value; if (!rowIssues(row).length && !selectedKeys.includes(Number(row.__key))) selectedKeys = [...selectedKeys, Number(row.__key)]; }"
                 />
                 <a-input
                   v-else
-                  :value="row[column.key] === null ? '' : String(row[column.key])"
+                  :value="row[column.sourceKey] === null ? '' : String(row[column.sourceKey])"
                   size="small"
-                  @update:value="(value: string) => { row[column.key] = value; if (!rowIssues(row).length && !selectedKeys.includes(Number(row.__key))) selectedKeys = [...selectedKeys, Number(row.__key)]; }"
+                  @update:value="(value: string) => { row[column.sourceKey] = value; if (!rowIssues(row).length && !selectedKeys.includes(Number(row.__key))) selectedKeys = [...selectedKeys, Number(row.__key)]; }"
                 />
               </td>
               <td>
@@ -165,6 +184,7 @@ const confirmDisabled = computed(() => {
   max-height: 62vh;
   overflow-y: auto;
 }
+.import-progress { display:flex; align-items:center; justify-content:center; gap:8px; margin:0 0 14px; color:#94a3b8; font-size:12px; }.import-progress span { white-space:nowrap; }.import-progress span.done { color:#16a34a; }.import-progress span.active { color:#1677ff; font-weight:700; }.import-progress i { width:54px; height:1px; background:#e2e8f0; }
 
 .table-import-file {
   display: flex;
@@ -215,7 +235,10 @@ const confirmDisabled = computed(() => {
   margin-right: 4px;
 }
 
-.table-import-map-chip {
+.table-import-map-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 2px 9px;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
@@ -223,6 +246,8 @@ const confirmDisabled = computed(() => {
   color: #64748b;
   font-size: 12px;
 }
+.table-import-map-row > span { min-width: 68px; color: #475569; }.table-import-map-row > b { color: #94a3b8; }
+.table-import-mapping :deep(.ant-alert) { width: 100%; padding: 5px 9px; }
 
 .table-import-map-chip b {
   color: #0f172a;

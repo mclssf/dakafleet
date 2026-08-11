@@ -7,6 +7,7 @@ import {
   CheckOutlined,
   ThunderboltOutlined,
   ToolOutlined,
+  UploadOutlined,
   CloseOutlined,
   DashboardOutlined,
   DownOutlined,
@@ -36,6 +37,8 @@ import ChargingDetailPage from './ChargingDetailPage.vue';
 import LoginPage from './LoginPage.vue';
 import MaintenanceDetailPage from './MaintenanceDetailPage.vue';
 import TireExpensePage from './TireExpensePage.vue';
+import TransferTaskListPage from './TransferTaskListPage.vue';
+import TableColumnSettings from './TableColumnSettings.vue';
 import {
   expenseImages,
   initialAgentMessages,
@@ -62,7 +65,9 @@ const pageHashMap: Record<PageKey, string> = {
   vehicleDetail: '#/vehicle-detail',
   projects: '#/projects',
   projectManage: '#/project-manage',
-  agentOps: '#/agentops'
+  agentOps: '#/agentops',
+  importList: '#/import-list',
+  exportList: '#/export-list'
 };
 
 const pageByRoute = Object.fromEntries(Object.entries(pageHashMap).map(([page, hash]) => [hash.replace(/^#/, ''), page])) as Record<string, PageKey>;
@@ -237,12 +242,15 @@ const pageTitle: Record<PageKey, string> = {
   vehicleDetail: '车辆账目明细',
   projects: '项目 / 车队管理',
   projectManage: '项目 / 车队管理',
-  agentOps: '智能体运营配置'
+  agentOps: '智能体运营配置',
+  importList: '导入导出',
+  exportList: '导入导出'
 };
 
 const companyNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
   { key: 'dashboard', label: '总车队看板', icon: DashboardOutlined },
-  { key: 'projects', label: '项目车队', icon: ProjectOutlined }
+  { key: 'projects', label: '项目车队', icon: ProjectOutlined },
+  { key: 'importList', label: '导入导出', icon: UploadOutlined }
 ];
 
 const projectNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
@@ -1171,7 +1179,7 @@ const projectProfitComparison = computed(() =>
   })
 );
 
-const weighColumns = [
+const baseWeighColumns = [
   { title: '装货日期', dataIndex: 'loadingDate', sorter: (a: PairedWeighRecord, b: PairedWeighRecord) => a.loadingDate.localeCompare(b.loadingDate), width: 112 },
   { title: '卸货日期', dataIndex: 'unloadingDate', sorter: (a: PairedWeighRecord, b: PairedWeighRecord) => a.unloadingDate.localeCompare(b.unloadingDate), width: 112 },
   { title: '单号', dataIndex: 'orderNo', width: 152 },
@@ -1189,7 +1197,7 @@ const weighColumns = [
   { title: '操作', dataIndex: 'action', fixed: 'right', width: 82 }
 ];
 
-const expenseColumns = [
+const baseExpenseColumns = [
   { title: '发生日期', dataIndex: 'occurredDate', width: 112 },
   { title: '车牌号', dataIndex: 'vehiclePlate', width: 116 },
   { title: '司机', dataIndex: 'driver', width: 82 },
@@ -1202,7 +1210,7 @@ const expenseColumns = [
   { title: '操作', dataIndex: 'action', fixed: 'right', width: 150 }
 ];
 
-const vehicleColumns = [
+const baseVehicleColumns = [
   { title: '车牌', dataIndex: 'plate', width: 120 },
   { title: '司机', dataIndex: 'driver', width: 86 },
   { title: '项目', dataIndex: 'projectId' },
@@ -1213,7 +1221,7 @@ const vehicleColumns = [
   { title: '操作', dataIndex: 'action', width: 88 }
 ];
 
-const vehicleBillColumns = [
+const baseVehicleBillColumns = [
   { title: '装货日期', dataIndex: 'loadingDate', width: 112 },
   { title: '卸货日期', dataIndex: 'unloadingDate', width: 112 },
   { title: '单号', dataIndex: 'orderNo', width: 150 },
@@ -1226,7 +1234,7 @@ const vehicleBillColumns = [
   { title: '操作', dataIndex: 'action', width: 80 }
 ];
 
-const vehicleExpenseColumns = [
+const baseVehicleExpenseColumns = [
   { title: '发生日期', dataIndex: 'occurredDate', width: 112 },
   { title: '费用类型', dataIndex: 'type', width: 96 },
   { title: '事项', dataIndex: 'item', width: 150 },
@@ -1235,6 +1243,19 @@ const vehicleExpenseColumns = [
   { title: '支付状态', dataIndex: 'payStatus', width: 96 },
   { title: '提报时间', dataIndex: 'submittedAt', width: 146 }
 ];
+
+function configurableTableColumns(baseColumns: any[], storageKey: string) {
+  const defaults = baseColumns.filter((column) => column.dataIndex !== 'action').map((column) => column.dataIndex);
+  const keys = ref<string[]>(JSON.parse(localStorage.getItem(storageKey) || 'null') || defaults);
+  watch(keys, (value) => localStorage.setItem(storageKey, JSON.stringify(value)), { deep: true });
+  const columns = computed(() => [...keys.value.map((key) => baseColumns.find((column) => column.dataIndex === key)).filter(Boolean), baseColumns.find((column) => column.dataIndex === 'action')].filter(Boolean));
+  return { keys, columns };
+}
+const { keys: weighFieldKeys, columns: weighColumns } = configurableTableColumns(baseWeighColumns, 'weigh-table-columns');
+const { keys: expenseFieldKeys, columns: expenseColumns } = configurableTableColumns(baseExpenseColumns, 'expense-table-columns');
+const { keys: vehicleFieldKeys, columns: vehicleColumns } = configurableTableColumns(baseVehicleColumns, 'vehicle-table-columns');
+const { keys: vehicleBillFieldKeys, columns: vehicleBillColumns } = configurableTableColumns(baseVehicleBillColumns, 'vehicle-bill-table-columns');
+const { keys: vehicleExpenseFieldKeys, columns: vehicleExpenseColumns } = configurableTableColumns(baseVehicleExpenseColumns, 'vehicle-expense-table-columns');
 
 const weighFieldGroups = computed<WeighReviewGroup[]>(() => {
   const pair = currentWeighPair.value;
@@ -1476,6 +1497,25 @@ function openEditProject(projectId: string) {
   projectEditorForm.wechatEmployeeIds = [...sourceConfig.wechatEmployeeIds];
   projectEditorForm.skillIds = [...(sourceConfig.skillIds ?? [])];
   projectEditorVisible.value = true;
+}
+
+function removeProject(projectId: string) {
+  const project = projectRows.value.find((item) => item.id === projectId);
+  if (!project) return;
+  if (projectRows.value.length <= 1) { message.warning('至少需要保留一个项目 / 车队'); return; }
+  Modal.confirm({
+    title: `删除“${project.name}”？`,
+    content: '项目配置和线路设置将被移除。已有业务明细不会删除，但将无法再从侧栏进入该项目。',
+    okText: '确认删除', okType: 'danger', cancelText: '取消',
+    onOk() {
+      projectRows.value = projectRows.value.filter((item) => item.id !== projectId);
+      projectRoutes.value = projectRoutes.value.filter((route) => route.projectId !== projectId);
+      const { [projectId]: _removed, ...remainingSources } = projectDataSourceMap.value;
+      projectDataSourceMap.value = remainingSources;
+      if (selectedProjectId.value === projectId) selectedProjectId.value = projectRows.value[0].id;
+      message.success('项目 / 车队已删除');
+    }
+  });
 }
 
 function closeProjectEditor() {
@@ -2636,6 +2676,8 @@ onBeforeUnmount(() => {
           activePage === 'chargingDetail' ||
           activePage === 'maintenanceDetail' ||
           activePage === 'tireExpense' ||
+          activePage === 'importList' ||
+          activePage === 'exportList' ||
           activePage === 'projectManage' ||
           activePage === 'projects' ||
           (activePage === 'agent' && !agentRightPanelVisible)
@@ -2656,7 +2698,7 @@ onBeforeUnmount(() => {
             v-for="item in companyNavItems"
             :key="item.key"
             class="nav-item"
-            :class="{ active: activePage === item.key }"
+            :class="{ active: activePage === item.key || (item.key === 'importList' && activePage === 'exportList') }"
             @click="navigate(item.key)"
           >
             <component :is="item.icon" />
@@ -2730,8 +2772,8 @@ onBeforeUnmount(() => {
       <main class="main-panel">
         <header class="topbar">
           <div>
-            <span v-if="activePage !== 'dashboard' && activePage !== 'projectManage'" class="eyebrow">{{ currentProject.name }}</span>
-            <span v-else-if="activePage === 'projectManage'" class="eyebrow">公司视角</span>
+            <span v-if="!['dashboard','projectManage','importList','exportList'].includes(activePage)" class="eyebrow">{{ currentProject.name }}</span>
+            <span v-else-if="activePage !== 'dashboard'" class="eyebrow">公司视角</span>
             <h1>{{ pageTitle[activePage] }}</h1>
           </div>
           <div class="topbar-actions">
@@ -3009,6 +3051,7 @@ onBeforeUnmount(() => {
             </a-input>
             <div class="filter-actions">
               <a-button @click="openWeighSupplement"><PlusOutlined />补录磅单</a-button>
+              <TableColumnSettings v-model="weighFieldKeys" :columns="baseWeighColumns" />
               <a-button><DownloadOutlined />导出磅单汇总表</a-button>
             </div>
           </div>
@@ -3255,6 +3298,7 @@ onBeforeUnmount(() => {
               <a-select-option value="已付款">已付款</a-select-option>
             </a-select>
             <a-button><DownloadOutlined />导出付款明细表</a-button>
+            <TableColumnSettings v-model="expenseFieldKeys" :columns="baseExpenseColumns" />
           </div>
           <a-table
             size="small"
@@ -3300,6 +3344,8 @@ onBeforeUnmount(() => {
         <ChargingDetailPage v-else-if="activePage === 'chargingDetail'" />
         <MaintenanceDetailPage v-else-if="activePage === 'maintenanceDetail'" />
         <TireExpensePage v-else-if="activePage === 'tireExpense'" />
+        <TransferTaskListPage v-else-if="activePage === 'importList'" mode="import" @change-mode="navigate($event === 'import' ? 'importList' : 'exportList')" />
+        <TransferTaskListPage v-else-if="activePage === 'exportList'" mode="export" @change-mode="navigate($event === 'import' ? 'importList' : 'exportList')" />
 
         <section v-else-if="activePage === 'dashboard'" class="content dashboard-screen">
           <div class="metric-grid four">
@@ -3412,7 +3458,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="vehicle-ledger-grid">
             <div class="chart-card vehicle-table-card">
-              <h3>磅单记录</h3>
+              <div class="table-card-title"><h3>磅单记录</h3><TableColumnSettings v-model="vehicleBillFieldKeys" :columns="baseVehicleBillColumns" /></div>
               <a-table
                 size="small"
                 :columns="vehicleBillColumns"
@@ -3435,7 +3481,7 @@ onBeforeUnmount(() => {
               </a-table>
             </div>
             <div class="chart-card vehicle-table-card">
-              <h3>报销费用记录</h3>
+              <div class="table-card-title"><h3>报销费用记录</h3><TableColumnSettings v-model="vehicleExpenseFieldKeys" :columns="baseVehicleExpenseColumns" /></div>
               <a-table
                 size="small"
                 :columns="vehicleExpenseColumns"
@@ -3532,6 +3578,7 @@ onBeforeUnmount(() => {
                             编辑
                           </a-button>
                           <a-button size="small" @click.stop="openProjectWorkbench(project.id)">工作台</a-button>
+                          <a-button size="small" danger @click.stop="removeProject(project.id)"><template #icon><DeleteOutlined /></template>删除</a-button>
                         </div>
                       </td>
                     </tr>
@@ -3826,6 +3873,7 @@ onBeforeUnmount(() => {
                   <h3>{{ currentProject.name }}</h3>
                   <p>{{ currentProject.route }}</p>
                 </div>
+                <TableColumnSettings v-model="vehicleFieldKeys" :columns="baseVehicleColumns" />
               </div>
               <a-table
                 size="small"
@@ -3860,6 +3908,8 @@ onBeforeUnmount(() => {
           activePage !== 'chargingDetail' &&
           activePage !== 'maintenanceDetail' &&
           activePage !== 'tireExpense' &&
+          activePage !== 'importList' &&
+          activePage !== 'exportList' &&
           activePage !== 'projectManage' &&
           activePage !== 'projects' &&
           (activePage !== 'agent' || agentRightPanelVisible)
