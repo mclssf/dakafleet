@@ -108,7 +108,12 @@ const selectedVehicleId = ref(vehicles[0].id);
 const agentInput = ref('');
 const agentMessages = ref<AgentMessage[]>([...initialAgentMessages]);
 const chatStreamRef = ref<HTMLElement | null>(null);
-const weighRows = ref<WeighBill[]>(weighBills.map((item) => ({ ...item, anomalies: [...item.anomalies] })));
+const weighRows = ref<WeighBill[]>(weighBills.map((item, index) => ({
+  ...item,
+  // 演示数据同时覆盖两种来源：前两组为装卸分开单，其余保留装卸合并单。
+  image: item.type === '到货磅单' && index < 5 ? `${item.image}?side=arrival-${item.id}` : item.image,
+  anomalies: [...item.anomalies]
+})));
 const expenseRows = ref<Expense[]>(reimbursements.map((item) => ({ ...item, anomalies: [...item.anomalies], images: [...item.images] })));
 const bulkExpenseRows = ref<Expense[]>(buildBulkExpenseRows());
 const reviewWeighPairIndex = ref(0);
@@ -124,6 +129,11 @@ const expenseRotation = ref(0);
 const expenseImageIndex = ref(0);
 const weighKeyword = ref('');
 const weighSupplementVisible = ref(false);
+const weighFormMode = ref<'create' | 'edit'>('create');
+const weighPhotoRecognizing = ref<'loading' | 'unloading' | ''>('');
+const weighPairImageModes = ref<Record<string, 'combined' | 'separate'>>({});
+const activeWeighImageTab = ref<WeighSource>('departure');
+const weighImageMode = computed(() => weighPairImageModes.value[currentWeighPair.value?.id] ?? (currentWeighPair.value?.departure.image === currentWeighPair.value?.arrival.image ? 'combined' : 'separate'));
 const weighSupplementForm = reactive({
   loadingDate: '2026-06-30',
   unloadingDate: '2026-06-30',
@@ -135,7 +145,9 @@ const weighSupplementForm = reactive({
   loadingPlace: '',
   loadingTonnage: 0,
   unloadingPlace: '',
-  unloadingTonnage: 0
+  unloadingTonnage: 0,
+  loadingImage: '',
+  unloadingImage: ''
 });
 const weighEditId = ref('');
 const weighEditForm = reactive<Record<string, any>>({
@@ -149,7 +161,9 @@ const weighEditForm = reactive<Record<string, any>>({
   loadingPlace: '',
   loadingTonnage: 0,
   unloadingPlace: '',
-  unloadingTonnage: 0
+  unloadingTonnage: 0,
+  loadingImage: '',
+  unloadingImage: ''
 });
 const weighRouteFilter = ref('全部线路');
 const weighDateRange = ref<string[]>([]);
@@ -700,6 +714,7 @@ interface PairedWeighRecord {
   loadingPlace: string;
   loadingTonnage: number;
   unloadingPlace: string;
+  weighDifference?: number;
   unloadingTonnage: number;
   taxableUnitPrice: number;
   cargoInsurance: number;
@@ -715,6 +730,8 @@ interface PairedWeighRecord {
   // 计价用线路 key：命中项目线路映射时为标准线路名，否则回退「装货地 → 卸货地」
   routeKey: string;
   routeMatched: boolean;
+  loadingImage?: string;
+  unloadingImage?: string;
 }
 
 type WeighSource = 'departure' | 'arrival';
@@ -1008,7 +1025,7 @@ const manualWeighRows = ref<PairedWeighRecord[]>([]);
 // 磅单列表行编辑覆盖表（键为记录 id），应用后重算派生字段
 type WeighEditable = Pick<
   PairedWeighRecord,
-  'loadingDate' | 'unloadingDate' | 'orderNo' | 'customer' | 'vehiclePlate' | 'driver' | 'goods' | 'loadingPlace' | 'loadingTonnage' | 'unloadingPlace' | 'unloadingTonnage'
+  'loadingDate' | 'unloadingDate' | 'orderNo' | 'customer' | 'vehiclePlate' | 'driver' | 'goods' | 'loadingPlace' | 'loadingTonnage' | 'unloadingPlace' | 'unloadingTonnage' | 'loadingImage' | 'unloadingImage'
 >;
 const weighEdits = ref<Record<string, Partial<WeighEditable>>>({});
 
@@ -1186,10 +1203,12 @@ const baseWeighColumns = [
   { title: '客户', dataIndex: 'customer', width: 240 },
   { title: '车牌', dataIndex: 'vehiclePlate', width: 118 },
   { title: '司机', dataIndex: 'driver', width: 86 },
+  { title: '线路', dataIndex: 'route', width: 220 },
   { title: '装货名称', dataIndex: 'goods', width: 118 },
   { title: '装货地点', dataIndex: 'loadingPlace', width: 128 },
   { title: '装货吨位', dataIndex: 'loadingTonnage', sorter: (a: PairedWeighRecord, b: PairedWeighRecord) => a.loadingTonnage - b.loadingTonnage, width: 106 },
   { title: '卸货地点', dataIndex: 'unloadingPlace', width: 128 },
+  { title: '磅差', dataIndex: 'weighDifference', sorter: (a: PairedWeighRecord, b: PairedWeighRecord) => (a.loadingTonnage - a.unloadingTonnage) - (b.loadingTonnage - b.unloadingTonnage), width: 92 },
   { title: '卸货吨位', dataIndex: 'unloadingTonnage', sorter: (a: PairedWeighRecord, b: PairedWeighRecord) => a.unloadingTonnage - b.unloadingTonnage, width: 106 },
   { title: '含税产值', dataIndex: 'taxableOutput', sorter: (a: PairedWeighRecord, b: PairedWeighRecord) => a.taxableOutput - b.taxableOutput, width: 112 },
   { title: '税点', dataIndex: 'taxPoint', sorter: (a: PairedWeighRecord, b: PairedWeighRecord) => a.taxPoint - b.taxPoint, width: 96 },
@@ -1505,10 +1524,14 @@ function removeProject(projectId: string) {
   if (projectRows.value.length <= 1) { message.warning('至少需要保留一个项目 / 车队'); return; }
   Modal.confirm({
     title: `删除“${project.name}”？`,
-    content: '项目配置和线路设置将被移除。已有业务明细不会删除，但将无法再从侧栏进入该项目。',
+    content: '项目配置和线路设置将被移除。已有业务明细也会删除。',
     okText: '确认删除', okType: 'danger', cancelText: '取消',
     onOk() {
       projectRows.value = projectRows.value.filter((item) => item.id !== projectId);
+      weighRows.value = weighRows.value.filter((item) => item.projectId !== projectId);
+      expenseRows.value = expenseRows.value.filter((item) => item.projectId !== projectId);
+      bulkExpenseRows.value = bulkExpenseRows.value.filter((item) => item.projectId !== projectId);
+      manualWeighRows.value = manualWeighRows.value.filter((item) => item.projectId !== projectId);
       projectRoutes.value = projectRoutes.value.filter((route) => route.projectId !== projectId);
       const { [projectId]: _removed, ...remainingSources } = projectDataSourceMap.value;
       projectDataSourceMap.value = remainingSources;
@@ -1837,22 +1860,66 @@ function goWeighAudit(record?: WeighBill) {
 
 function openPairedWeigh(record: PairedWeighRecord) {
   const sourceBill = weighRows.value.find((item) => item.id === record.sourceBillId);
-  goWeighAudit(sourceBill);
+  if (sourceBill) {
+    activeWeighImageTab.value = 'departure';
+    const pairIndex = auditWeighPairs.value.findIndex((item) => item.departure.id === record.sourceBillId);
+    const pair = auditWeighPairs.value[pairIndex];
+    if (pair) weighPairImageModes.value = { ...weighPairImageModes.value, [pair.id]: pair.departure.image === pair.arrival.image ? 'combined' : 'separate' };
+    goWeighAudit(sourceBill);
+    return;
+  }
+  openWeighEdit(record);
+}
+
+function changeWeighImageMode(mode: 'combined' | 'separate') {
+  const pair = currentWeighPair.value;
+  if (!pair || weighImageMode.value === mode) return;
+  if (mode === 'separate') {
+    weighPairImageModes.value = { ...weighPairImageModes.value, [pair.id]: 'separate' };
+    pair.arrival.image = '';
+    message.info('已切换为装卸分开单，请补充卸货磅单照片');
+    return;
+  }
+  Modal.confirm({
+    title: '切换为装卸合并单？',
+    content: '切换后需要上传一张同时包含装货和卸货信息的合并单，当前两张图片会在保存后被替换。',
+    okText: '切换并上传', cancelText: '取消',
+    onOk() {
+      weighPairImageModes.value = { ...weighPairImageModes.value, [pair.id]: 'combined' };
+      pair.departure.image = '';
+      pair.arrival.image = '';
+    }
+  });
+}
+
+function onAuditWeighPhoto(source: WeighSource, event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0]; input.value = '';
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { message.error('请选择 JPG、PNG 或 WEBP 图片'); return; }
+  if (file.size > 10 * 1024 * 1024) { message.error('单张照片不能超过 10 MB'); return; }
+  const image = URL.createObjectURL(file);
+  const bill = currentWeighPair.value[source];
+  bill.image = image;
+  if (weighImageMode.value === 'combined') {
+    currentWeighPair.value.departure.image = image;
+    currentWeighPair.value.arrival.image = image;
+  }
+  weighPhotoRecognizing.value = source === 'departure' ? 'loading' : 'unloading';
+  window.setTimeout(() => {
+    weighPhotoRecognizing.value = '';
+    message.success(`${weighImageMode.value === 'combined' ? '装卸合并单' : source === 'departure' ? '装货照片' : '卸货照片'}已替换并重新识别，请核对右侧字段后保存`);
+  }, 650);
 }
 
 function openWeighEdit(record: PairedWeighRecord) {
+  weighFormMode.value = 'edit';
   weighEditId.value = record.id;
-  weighEditForm.loadingDate = record.loadingDate;
-  weighEditForm.unloadingDate = record.unloadingDate;
-  weighEditForm.orderNo = record.orderNo;
-  weighEditForm.customer = record.customer;
-  weighEditForm.vehiclePlate = record.vehiclePlate;
-  weighEditForm.driver = record.driver;
-  weighEditForm.goods = record.goods;
-  weighEditForm.loadingPlace = record.loadingPlace;
-  weighEditForm.loadingTonnage = record.loadingTonnage;
-  weighEditForm.unloadingPlace = record.unloadingPlace;
-  weighEditForm.unloadingTonnage = record.unloadingTonnage;
+  Object.assign(weighSupplementForm, record, {
+    loadingImage: record.loadingImage || weighRows.value.find((item) => item.id === record.sourceBillId)?.image || '',
+    unloadingImage: record.unloadingImage || ''
+  });
+  weighSupplementVisible.value = true;
 }
 
 function cancelWeighEdit() {
@@ -1873,7 +1940,9 @@ function saveWeighEdit() {
       loadingPlace: weighEditForm.loadingPlace,
       loadingTonnage: Number(weighEditForm.loadingTonnage) || 0,
       unloadingPlace: weighEditForm.unloadingPlace,
-      unloadingTonnage: Number(weighEditForm.unloadingTonnage) || 0
+      unloadingTonnage: Number(weighEditForm.unloadingTonnage) || 0,
+      loadingImage: weighEditForm.loadingImage,
+      unloadingImage: weighEditForm.unloadingImage
     }
   };
   weighEditId.value = '';
@@ -1882,6 +1951,8 @@ function saveWeighEdit() {
 
 // 补录磅单
 function openWeighSupplement() {
+  weighFormMode.value = 'create';
+  weighEditId.value = '';
   Object.assign(weighSupplementForm, {
     loadingDate: '2026-06-30',
     unloadingDate: '2026-06-30',
@@ -1893,9 +1964,47 @@ function openWeighSupplement() {
     loadingPlace: '',
     loadingTonnage: 0,
     unloadingPlace: '',
-    unloadingTonnage: 0
+    unloadingTonnage: 0,
+    loadingImage: '',
+    unloadingImage: ''
   });
   weighSupplementVisible.value = true;
+}
+
+function onWeighPhoto(source: 'loading' | 'unloading', event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0]; input.value = '';
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { message.error('请选择 JPG、PNG 或 WEBP 图片'); return; }
+  if (file.size > 10 * 1024 * 1024) { message.error('单张照片不能超过 10 MB'); return; }
+  weighSupplementForm[source === 'loading' ? 'loadingImage' : 'unloadingImage'] = URL.createObjectURL(file);
+  weighPhotoRecognizing.value = source;
+  window.setTimeout(() => {
+    if (source === 'loading') {
+      weighSupplementForm.loadingDate ||= '2026-06-30';
+      weighSupplementForm.vehiclePlate ||= '云A6K328';
+      weighSupplementForm.goods ||= '煤炭';
+      weighSupplementForm.loadingPlace ||= '砚山储配站';
+      weighSupplementForm.loadingTonnage ||= 42.68;
+    } else {
+      weighSupplementForm.unloadingDate ||= weighSupplementForm.loadingDate;
+      weighSupplementForm.vehiclePlate ||= '云A6K328';
+      weighSupplementForm.unloadingPlace ||= '广西德保电厂';
+      weighSupplementForm.unloadingTonnage ||= 42.56;
+    }
+    weighPhotoRecognizing.value = '';
+    message.success(`${source === 'loading' ? '装货' : '卸货'}照片识别完成，请核对识别结果`);
+  }, 650);
+}
+
+function saveWeighForm() {
+  if (weighFormMode.value === 'edit') {
+    Object.assign(weighEditForm, weighSupplementForm);
+    saveWeighEdit();
+    weighSupplementVisible.value = false;
+    return;
+  }
+  saveWeighSupplement();
 }
 
 function saveWeighSupplement() {
@@ -1945,6 +2054,8 @@ function saveWeighSupplement() {
       sourceBillId: '',
       routeKey,
       routeMatched: Boolean(matchedRoute)
+      ,loadingImage: weighSupplementForm.loadingImage
+      ,unloadingImage: weighSupplementForm.unloadingImage
     },
     ...manualWeighRows.value
   ];
@@ -2926,20 +3037,23 @@ onBeforeUnmount(() => {
 
           <div class="review-grid paired-review-grid">
             <div class="document-pane">
-              <div class="image-toolbar">
-                <a-button size="small" @click="weighZoom = Math.max(0.7, weighZoom - 0.1)"><ZoomOutOutlined /></a-button>
-                <a-button size="small" @click="weighZoom = Math.min(1.6, weighZoom + 0.1)"><ZoomInOutlined /></a-button>
-                <a-button size="small" @click="weighRotation = (weighRotation + 90) % 360"><RotateRightOutlined /></a-button>
-                <span>{{ Math.round(weighZoom * 100) }}%</span>
+              <div class="source-message-bar"><MessageOutlined /><span>群原始消息</span><b>{{ weighImageMode === 'combined' ? '1 条' : '2 条' }}</b><button>展开原文<DownOutlined /></button></div>
+              <div class="weigh-document-nav">
+                <div v-if="weighImageMode === 'separate'" class="weigh-image-tabs"><button :class="{ active: activeWeighImageTab === 'departure' }" @click="activeWeighImageTab = 'departure'">装货单</button><button :class="{ active: activeWeighImageTab === 'arrival' }" @click="activeWeighImageTab = 'arrival'">卸货单</button></div>
+                <strong v-else>装卸合并单</strong>
+                <a-dropdown trigger="click" placement="bottomRight"><a-button type="text" size="small"><SettingOutlined />图片设置<DownOutlined /></a-button><template #overlay><a-menu><a-menu-item key="combined" @click="changeWeighImageMode('combined')">设为装卸合并单</a-menu-item><a-menu-item key="separate" @click="changeWeighImageMode('separate')">设为装卸分开单</a-menu-item><a-menu-divider /><a-menu-item key="replace"><label class="menu-file-label"><input type="file" accept="image/jpeg,image/png,image/webp" @change="onAuditWeighPhoto(weighImageMode === 'combined' ? 'departure' : activeWeighImageTab, $event)" />{{ weighPhotoRecognizing ? '识别中' : '替换当前图片' }}</label></a-menu-item></a-menu></template></a-dropdown>
               </div>
               <div class="single-document-stage">
                 <div class="weigh-image-title">
-                  <strong>原始照片：装货磅单 + 卸货磅单</strong>
+                  <strong>原始照片：{{ weighImageMode === 'combined' ? '装卸合并磅单' : '装货磅单 + 卸货磅单' }}</strong>
                   <span>{{ currentWeighPair.departure.date }} {{ currentWeighPair.departure.time }} / {{ currentWeighPair.arrival.date }} {{ currentWeighPair.arrival.time }}</span>
                 </div>
                 <div class="single-weigh-stage">
                   <div class="single-weigh-canvas" :style="{ transform: `scale(${weighZoom}) rotate(${weighRotation}deg)` }">
-                    <img :src="currentWeighPair.departure.image" alt="磅单原始照片" />
+                    <div class="paired-original-images combined">
+                      <figure v-if="weighImageMode === 'combined' || activeWeighImageTab === 'departure'"><img v-if="currentWeighPair.departure.image" :src="currentWeighPair.departure.image" :alt="weighImageMode === 'combined' ? '装卸合并磅单' : '装货磅单原始照片'" /><div v-else class="weigh-image-empty"><UploadOutlined /><span>请上传{{ weighImageMode === 'combined' ? '装卸合并单' : '装货磅单' }}</span></div><figcaption>{{ weighImageMode === 'combined' ? '装卸合并单' : '装货磅单' }}</figcaption></figure>
+                      <figure v-else><img v-if="currentWeighPair.arrival.image" :src="currentWeighPair.arrival.image" alt="卸货磅单原始照片" /><div v-else class="weigh-image-empty"><UploadOutlined /><span>请上传卸货磅单</span></div><figcaption>卸货磅单</figcaption></figure>
+                    </div>
                     <template v-for="source in weighHighlightSources" :key="source">
                       <div v-if="weighBoxForSource(source)" class="field-highlight" :class="source" :style="boxStyle(weighBoxForSource(source))">
                         {{ source === 'departure' ? '装货' : '卸货' }} · {{ activeWeighField?.label }}
@@ -2949,6 +3063,7 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </div>
+              <div class="weigh-bottom-toolbar"><a-button size="small"><PictureOutlined />查看图片</a-button><span>{{ Math.round(weighZoom * 100) }}%</span><a-button size="small" @click="weighZoom = Math.max(0.7, weighZoom - 0.1)"><ZoomOutOutlined /></a-button><a-button size="small" @click="weighZoom = Math.min(1.6, weighZoom + 0.1)"><ZoomInOutlined /></a-button><a-button size="small" @click="weighRotation = (weighRotation - 90 + 360) % 360"><RotateRightOutlined /></a-button><a-button size="small" @click="weighRotation = (weighRotation + 90) % 360"><RotateRightOutlined /></a-button></div>
             </div>
 
             <div class="form-pane paired-form-pane">
@@ -3067,11 +3182,13 @@ onBeforeUnmount(() => {
             <template #emptyText><a-empty description="暂无磅单数据" /></template>
             <template #bodyCell="{ column, record }">
               <template v-if="column.dataIndex === 'loadingTonnage' || column.dataIndex === 'unloadingTonnage'">{{ ton(record[column.dataIndex]) }}</template>
+              <template v-else-if="column.dataIndex === 'route'">{{ record.loadingPlace }}-{{ record.unloadingPlace }}</template>
+              <template v-else-if="column.dataIndex === 'weighDifference'">{{ ton(record.loadingTonnage - record.unloadingTonnage) }}</template>
               <template v-else-if="column.dataIndex === 'taxableOutput' || column.dataIndex === 'taxPoint' || column.dataIndex === 'profit'">
                 <span :class="{ danger: column.dataIndex === 'profit' && record.profit < 0 }">{{ money(record[column.dataIndex]) }}</span>
               </template>
               <template v-else-if="column.dataIndex === 'action'">
-                <a-button size="small" @click="openPairedWeigh(record)">原图</a-button>
+                <a-button size="small" @click="openPairedWeigh(record)"><EditOutlined />详情</a-button>
               </template>
             </template>
           </a-table>
@@ -3993,7 +4110,21 @@ onBeforeUnmount(() => {
       </aside>
     </div>
 
-    <a-modal v-model:open="weighSupplementVisible" title="补录磅单" width="640px" ok-text="补录" cancel-text="取消" @ok="saveWeighSupplement">
+    <a-modal v-model:open="weighSupplementVisible" :title="weighFormMode === 'edit' ? '编辑磅单' : '补录磅单'" width="820px" :ok-text="weighFormMode === 'edit' ? '保存修改' : '确认补录'" cancel-text="取消" @ok="saveWeighForm">
+      <div class="weigh-photo-grid">
+        <label class="weigh-photo-upload" :class="{ filled: weighSupplementForm.loadingImage }">
+          <input type="file" accept="image/jpeg,image/png,image/webp" @change="onWeighPhoto('loading', $event)" />
+          <img v-if="weighSupplementForm.loadingImage" :src="weighSupplementForm.loadingImage" alt="装货磅单" />
+          <span v-else><UploadOutlined /><b>上传装货照片</b><small>自动识别日期、车牌、地点、货物和吨位</small></span>
+          <em v-if="weighPhotoRecognizing === 'loading'">识别中...</em><i v-else-if="weighSupplementForm.loadingImage">点击替换装货照片</i>
+        </label>
+        <label class="weigh-photo-upload" :class="{ filled: weighSupplementForm.unloadingImage }">
+          <input type="file" accept="image/jpeg,image/png,image/webp" @change="onWeighPhoto('unloading', $event)" />
+          <img v-if="weighSupplementForm.unloadingImage" :src="weighSupplementForm.unloadingImage" alt="卸货磅单" />
+          <span v-else><UploadOutlined /><b>上传卸货照片</b><small>自动识别日期、车牌、地点和卸货吨位</small></span>
+          <em v-if="weighPhotoRecognizing === 'unloading'">识别中...</em><i v-else-if="weighSupplementForm.unloadingImage">点击替换卸货照片</i>
+        </label>
+      </div>
       <div class="weigh-edit-form">
         <label><span>装货日期</span><a-input v-model:value="weighSupplementForm.loadingDate" /></label>
         <label><span>卸货日期</span><a-input v-model:value="weighSupplementForm.unloadingDate" /></label>
@@ -4007,7 +4138,7 @@ onBeforeUnmount(() => {
         <label><span>卸货地点</span><a-input v-model:value="weighSupplementForm.unloadingPlace" /></label>
         <label><span>卸货吨位*</span><a-input-number v-model:value="weighSupplementForm.unloadingTonnage" :min="0" :precision="2" style="width:100%" /></label>
       </div>
-      <p class="weigh-edit-tip">补录后按当前项目「装货地点 → 卸货地点」线路单价自动计算含税产值、税点与利润。</p>
+      <p class="weigh-edit-tip">照片识别结果会自动填入下方字段，请核对后保存。系统按当前项目「装货地点 → 卸货地点」线路单价计算含税产值、税点与利润。</p>
     </a-modal>
 
   </a-config-provider>
