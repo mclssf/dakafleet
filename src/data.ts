@@ -1051,25 +1051,25 @@ export const reimbursements: Expense[] = [
 ];
 
 export const quickPrompts = [
-  '查看今日待审核磅单',
-  '汇总本月每辆车利润',
-  '6 月砚山到富宁这条线路共运了多少吨？',
-  '把 M202607130227 这张标记为有疑点',
-  '把 6 月的磅单汇总表导出来',
-  '5 笔净重差异都来自哪些车？',
-  '煤炭和铝业哪个项目利润更高？',
-  '驳回一张磅单后还能恢复吗？'
+  '当前项目有哪些待审核磅单？',
+  '查看当前项目异常磅单',
+  '本月哪些车辆利润为负？',
+  '查询赣J03528D车辆账目',
+  '统计砚山-德保电厂线路运量和利润',
+  '查看运单与磅单匹配情况',
+  '查询司机罗明的报销明细',
+  '导出本月磅单汇总表'
 ];
 
 export const initialAgentMessages: AgentMessage[] = [
   {
     role: 'agent',
-    content: '我已接入微信群磅单、报销凭证和历史 Excel 汇总表。可以直接问我待审核、利润、异常、车辆明细或导出汇总。',
-    skills: ['图片识别', '账务校验', '利润归因'],
+    content: '我已接入当前项目的磅单、运单、车辆账目、报销凭证和项目线路数据。可以直接问我审核队列、运单匹配、车辆利润、线路运量、异常单据或导出汇总。',
+    skills: ['磅单审核', '运单匹配', '车辆利润分析'],
     resultCards: [
       { label: '待审核磅单', value: '8 单', tone: 'orange', action: 'weighAudit' },
       { label: '待审核报销', value: '7 笔', tone: 'orange', action: 'expenseAudit' },
-      { label: '异常提醒', value: '13 条', tone: 'red' }
+      { label: '异常提醒', value: '13 条', tone: 'red', action: 'weighAudit' }
     ]
   }
 ];

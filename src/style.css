@@ -601,6 +601,7 @@ button {
 .summary-tags,
 .shortcut-row {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 10px;
@@ -619,6 +620,8 @@ button {
   text-align: left;
   cursor: default;
 }
+.mini-result.clickable { cursor: pointer; transition: transform .15s ease, box-shadow .15s ease; }
+.mini-result.clickable:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(15, 23, 42, .12); }
 
 button.mini-result {
   font: inherit;
@@ -895,6 +898,40 @@ button.mini-result {
   border: 1px solid #d6dee8;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.summary-tags.has-audit-alerts {
+  position: relative;
+  min-height: 38px;
+  padding: 5px 10px 5px 14px;
+  border: 1px solid #ffe0a3;
+  border-radius: 7px;
+  background: #fffaf0;
+  box-shadow: 0 2px 6px rgba(173, 104, 0, 0.08);
+}
+.summary-tags.has-audit-alerts::before { content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 3px; background: #faad14; }
+
+.audit-alert-title {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+  color: #ad6800 !important;
+  font-weight: 700;
+}
+
+.audit-anomaly-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 9px;
+  border: 1px solid #ffd591;
+  border-radius: 5px;
+  background: #fff;
+  color: #ad6800;
+  font-weight: 600;
+  font-size: 12px;
+  box-shadow: none;
 }
 
 .review-summary span {
@@ -1512,6 +1549,9 @@ button.mini-result {
   border-radius: 8px;
   background: #fff;
 }
+.field-group.has-field-issue { border-color: #ff7875; box-shadow: 0 0 0 2px rgba(255, 77, 79, .10); }
+.field-group.has-field-issue .field-group-title { color: #a8071a; background: #fff1f0; border-bottom-color: #ffccc7; }
+.field-group.has-field-issue .field-group-title::after { content: '需重点核对'; margin-left: auto; padding: 2px 7px; border-radius: 4px; color: #cf1322; background: #fff; font-size: 11px; font-weight: 600; }
 
 .field-group-title {
   display: flex;
@@ -2337,6 +2377,10 @@ button.mini-result {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
+}
+
+.project-kpi-row {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .project-kpi-row > div,

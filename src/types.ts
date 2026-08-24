@@ -44,6 +44,7 @@ export interface WeighBill {
   gross: number;
   tare: number;
   net: number;
+  weighbillNo?: string;
   carrier: string;
   vehiclePlate: string;
   driver: string;
@@ -101,6 +102,7 @@ export type PageKey =
   | 'agent'
   | 'weighAudit'
   | 'weighList'
+  | 'waybillList'
   | 'expenseAudit'
   | 'expenseList'
   | 'chargingDetail'
