@@ -798,7 +798,19 @@ interface WeighReviewGroup {
   fields: WeighReviewField[];
 }
 
+type WeighIssueScope = WeighSource | 'public' | 'both';
+interface WeighAuditIssue {
+  code: string;
+  label: string;
+  detail: string;
+  scopes: WeighIssueScope[];
+  fieldKeys?: string[];
+}
+
 const weighHighlightSources: WeighSource[] = ['departure', 'arrival'];
+const driverReportedNetWeights: Record<string, number> = {
+  'WB20260626007-WB20260626008': 43.72
+};
 
 const weighPhotoBoxes: Record<WeighSource, Record<string, FieldBox>> = {
   departure: {
@@ -1113,6 +1125,140 @@ const auditWeighPairs = computed<WeighAuditPair[]>(() => {
 });
 
 const currentWeighPair = computed(() => auditWeighPairs.value[reviewWeighPairIndex.value] ?? auditWeighPairs.value[0] ?? buildWeighAuditPair(weighRows.value[0], weighRows.value[1] ?? weighRows.value[0]));
+
+function hasWeighAnomaly(bill: WeighBill, keyword: string) {
+  return bill.anomalies.some((item) => item.includes(keyword));
+}
+
+function addWeighIssue(issues: WeighAuditIssue[], issue: WeighAuditIssue) {
+  if (!issues.some((item) => item.code === issue.code)) issues.push(issue);
+}
+
+function buildWeighAuditIssues(pair: WeighAuditPair): WeighAuditIssue[] {
+  const issues: WeighAuditIssue[] = [];
+  const { departure, arrival } = pair;
+  const reportedNet = driverReportedNetWeights[pair.id];
+  const hasArrivalMatchPending = hasWeighAnomaly(departure, '等待到货单匹配') || hasWeighAnomaly(departure, '缺少到货单');
+
+  if (hasArrivalMatchPending) {
+    addWeighIssue(issues, {
+      code: 'arrival-pending',
+      label: '等待到货单匹配',
+      detail: '司机已提交装货磅单，卸货磅单仍需确认或补齐后才能通过审核。',
+      scopes: ['arrival']
+    });
+  }
+
+  if (hasWeighAnomaly(departure, '识别置信度偏低') || departure.confidence < 0.7) {
+    addWeighIssue(issues, {
+      code: 'departure-low-confidence',
+      label: '装货磅单识别置信度偏低',
+      detail: `装货磅单识别置信度 ${Math.round(departure.confidence * 100)}%，请核对原图与关键字段。`,
+      scopes: ['departure']
+    });
+  }
+
+  if (hasWeighAnomaly(arrival, '识别置信度偏低') || arrival.confidence < 0.7) {
+    addWeighIssue(issues, {
+      code: 'arrival-low-confidence',
+      label: '卸货磅单识别置信度偏低',
+      detail: `卸货磅单识别置信度 ${Math.round(arrival.confidence * 100)}%，请核对原图与关键字段。`,
+      scopes: ['arrival']
+    });
+  }
+
+  if (reportedNet !== undefined) {
+    const mismatchedSources = ([
+      ['departure', departure.net],
+      ['arrival', arrival.net]
+    ] as const)
+      .filter(([, value]) => Math.abs(value - reportedNet) >= 0.1)
+      .map(([source]) => source);
+    if (mismatchedSources.length) {
+      addWeighIssue(issues, {
+        code: 'driver-reported-net-mismatch',
+        label: '重量不一致',
+        detail: `司机群上报 ${reportedNet.toFixed(2)} 吨；装货识别 ${departure.net.toFixed(2)} 吨，卸货识别 ${arrival.net.toFixed(2)} 吨。`,
+        scopes: mismatchedSources,
+        fieldKeys: mismatchedSources.map((source) => `${source}.net`)
+      });
+    }
+  } else if (hasWeighAnomaly(departure, '重量不一致') || hasWeighAnomaly(arrival, '重量不一致') || Math.abs(departure.net - arrival.net) >= 0.3) {
+    const difference = Math.abs(departure.net - arrival.net);
+    addWeighIssue(issues, {
+      code: 'net-weight-difference',
+      label: '装卸净重差异',
+      detail: `装货净重 ${departure.net.toFixed(2)} 吨，卸货净重 ${arrival.net.toFixed(2)} 吨，相差 ${difference.toFixed(2)} 吨。`,
+      scopes: ['both'],
+      fieldKeys: ['departure.net', 'arrival.net']
+    });
+  }
+
+  if (departure.vehiclePlate !== arrival.vehiclePlate || hasWeighAnomaly(departure, '车牌不一致') || hasWeighAnomaly(arrival, '车牌不一致')) {
+    addWeighIssue(issues, {
+      code: 'vehicle-plate-mismatch',
+      label: '车牌不一致',
+      detail: `装货单车牌 ${departure.vehiclePlate}，卸货单车牌 ${arrival.vehiclePlate}，请确认是否为识别误差或错配单据。`,
+      scopes: ['public'],
+      fieldKeys: ['vehiclePlate']
+    });
+  }
+
+  if (arrival.date < departure.date || (arrival.date === departure.date && arrival.time <= departure.time)) {
+    addWeighIssue(issues, {
+      code: 'weigh-time-order',
+      label: '装卸时间异常',
+      detail: '卸货过磅时间早于或等于装货过磅时间，请核对日期、时间及单据归属。',
+      scopes: ['both'],
+      fieldKeys: ['departure.dateTime', 'arrival.dateTime']
+    });
+  }
+
+  ([['departure', departure], ['arrival', arrival]] as const).forEach(([source, bill]) => {
+    const sourceLabel = source === 'departure' ? '装货' : '卸货';
+    const missingWeights = [
+      ['gross', '毛重'],
+      ['tare', '皮重'],
+      ['net', '净重']
+    ].filter(([key]) => !Number((bill as unknown as Record<string, number>)[key]));
+    if (missingWeights.length || hasWeighAnomaly(bill, '关键重量缺失')) {
+      addWeighIssue(issues, {
+        code: `${source}-weight-missing`,
+        label: `${sourceLabel}关键重量缺失`,
+        detail: `${sourceLabel}磅单缺少 ${missingWeights.map(([, label]) => label).join('、') || '关键重量'}，请补充或重传清晰图片。`,
+        scopes: [source],
+        fieldKeys: missingWeights.map(([key]) => `${source}.${key}`)
+      });
+    }
+    if (bill.gross > 0 && bill.tare > 0 && bill.net > 0 && Math.abs((bill.gross - bill.tare) - bill.net) >= 0.1) {
+      addWeighIssue(issues, {
+        code: `${source}-net-calculation`,
+        label: `${sourceLabel}净重计算异常`,
+        detail: `${sourceLabel}毛重减皮重与识别净重不一致，请复核磅单数字。`,
+        scopes: [source],
+        fieldKeys: [`${source}.gross`, `${source}.tare`, `${source}.net`]
+      });
+    }
+  });
+
+  if (!pair.routeMatched) {
+    addWeighIssue(issues, {
+      code: 'route-unmatched',
+      label: '线路未匹配',
+      detail: '发货单位与收货单位未同时命中项目线路，请选择正确线路后再审核。',
+      scopes: ['public'],
+      fieldKeys: ['route']
+    });
+  }
+
+  return issues;
+}
+
+const weighAuditIssues = computed(() => buildWeighAuditIssues(currentWeighPair.value));
+const hasWholePairRecognitionRisk = computed(() =>
+  weighAuditIssues.value.some((issue) => issue.code === 'departure-low-confidence') &&
+  weighAuditIssues.value.some((issue) => issue.code === 'arrival-low-confidence')
+);
 
 const filteredPairedWeighRows = computed(() =>
   pairedWeighRows.value.filter((item) => {
@@ -1491,8 +1637,31 @@ function routeMileage(loadingPlace: string, unloadingPlace: string, seed: string
   return 145 + (fingerprint % 286);
 }
 
-function weighGroupHasIssue(group: { fields: Array<{ label: string }> }) {
-  return group.fields.some((field) => currentWeighPair.value.anomalies.some((issue) => issue.includes(field.label.slice(0, 2))));
+function weighGroupScope(group: WeighReviewGroup): WeighIssueScope {
+  if (group.title === '装货磅单') return 'departure';
+  if (group.title === '卸货磅单') return 'arrival';
+  return 'public';
+}
+
+function weighGroupIssues(group: WeighReviewGroup) {
+  const scope = weighGroupScope(group);
+  return weighAuditIssues.value.filter((issue) => issue.scopes.includes(scope) || issue.scopes.includes('both'));
+}
+
+function weighGroupHasIssue(group: WeighReviewGroup) {
+  return weighGroupIssues(group).length > 0;
+}
+
+function weighFieldIssues(item: WeighReviewField) {
+  return weighAuditIssues.value.filter((issue) => issue.fieldKeys?.includes(item.key));
+}
+
+function weighFieldIssueText(item: WeighReviewField) {
+  return weighFieldIssues(item).map((issue) => issue.label).join('、');
+}
+
+function weighKpiHasIssue(source: WeighSource) {
+  return weighAuditIssues.value.some((issue) => issue.fieldKeys?.includes(`${source}.net`));
 }
 
 function projectName(projectId: string) {
@@ -3130,13 +3299,15 @@ onBeforeUnmount(() => {
                 </a-select-option>
               </a-select>
             </div>
-            <div class="summary-tags" :class="{ 'has-audit-alerts': currentWeighPair.anomalies.length }">
-              <span v-if="currentWeighPair.anomalies.length" class="audit-alert-title"><WarningOutlined />需重点关注</span>
+            <div class="summary-tags" :class="{ 'has-audit-alerts': weighAuditIssues.length }">
+              <span v-if="weighAuditIssues.length" class="audit-alert-title"><WarningOutlined />需重点关注</span>
               <a-tag :color="statusColor(currentWeighPair.status)">{{ currentWeighPair.status }}</a-tag>
               <a-tag :color="currentWeighPair.routeMatched ? 'green' : 'orange'">
                 线路{{ currentWeighPair.routeMatched ? `已匹配 ${currentWeighPair.route}` : '未匹配' }}
               </a-tag>
-              <a-tag v-for="item in currentWeighPair.anomalies" :key="item" color="red" class="audit-anomaly-tag"><WarningOutlined />{{ item }}</a-tag>
+              <a-tooltip v-for="item in weighAuditIssues" :key="item.code" :title="item.detail">
+                <a-tag color="red" class="audit-anomaly-tag"><WarningOutlined />{{ item.label }}</a-tag>
+              </a-tooltip>
             </div>
           </div>
 
@@ -3171,7 +3342,7 @@ onBeforeUnmount(() => {
               <div class="weigh-bottom-toolbar"><a-button size="small"><PictureOutlined />查看图片</a-button><span>{{ Math.round(weighZoom * 100) }}%</span><a-button size="small" @click="weighZoom = Math.max(0.7, weighZoom - 0.1)"><ZoomOutOutlined /></a-button><a-button size="small" @click="weighZoom = Math.min(1.6, weighZoom + 0.1)"><ZoomInOutlined /></a-button><a-button size="small" @click="weighRotation = (weighRotation - 90 + 360) % 360"><RotateRightOutlined /></a-button><a-button size="small" @click="weighRotation = (weighRotation + 90) % 360"><RotateRightOutlined /></a-button></div>
             </div>
 
-            <div class="form-pane paired-form-pane">
+            <div class="form-pane paired-form-pane" :class="{ 'has-whole-pair-risk': hasWholePairRecognitionRisk }">
               <div class="form-head">
                 <div>
                   <strong>识别结果</strong>
@@ -3188,13 +3359,14 @@ onBeforeUnmount(() => {
                 <div v-for="group in weighFieldGroups" :key="group.title" class="field-group" :class="{ 'has-field-issue': weighGroupHasIssue(group) }">
                   <div class="field-group-title" :class="group.tone">
                     <strong>{{ group.title }}</strong>
+                    <span v-if="weighGroupIssues(group).length" class="group-issue-note"><WarningOutlined />{{ weighGroupIssues(group).map(item => item.label).join('、') }}</span>
                   </div>
                   <div class="field-table compact paired-field-table">
                     <div
                       v-for="item in group.fields"
                       :key="item.key"
                       class="field-row"
-                      :class="{ active: activeFieldKey === item.key }"
+                      :class="{ active: activeFieldKey === item.key, 'has-field-issue': weighFieldIssues(item).length }"
                       @pointerenter="activeFieldKey = item.key"
                       @mouseover="activeFieldKey = item.key"
                       @focusin="activeFieldKey = item.key"
@@ -3215,7 +3387,9 @@ onBeforeUnmount(() => {
                         <a-select-option v-for="name in currentPairRouteOptions" :key="name" :value="name">{{ name }}</a-select-option>
                       </a-select>
                       <a-input v-else :value="String(item.value)" size="small" :disabled="item.source === 'none'" @update:value="onWeighInput(item.key, $event)" />
-                      <span class="field-issue">{{ currentWeighPair.anomalies.find((issue) => issue.includes(item.label.slice(0, 2))) || '-' }}</span>
+                      <a-tooltip :title="weighFieldIssues(item).map(issue => issue.detail).join('；')">
+                        <span class="field-issue" :class="{ visible: weighFieldIssues(item).length }"><WarningOutlined v-if="weighFieldIssues(item).length" />{{ weighFieldIssueText(item) || '-' }}</span>
+                      </a-tooltip>
                     </div>
                   </div>
                 </div>

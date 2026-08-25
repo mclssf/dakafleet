@@ -1523,6 +1523,15 @@ button.mini-result {
   background: #fbfbfb;
 }
 
+.pair-kpi-grid > div.has-kpi-issue {
+  border-color: #ff7875;
+  background: #fff1f0;
+}
+
+.pair-kpi-grid > div.has-kpi-issue strong {
+  color: #cf1322;
+}
+
 .pair-kpi-grid span {
   display: block;
   color: #64748b;
@@ -1551,7 +1560,6 @@ button.mini-result {
 }
 .field-group.has-field-issue { border-color: #ff7875; box-shadow: 0 0 0 2px rgba(255, 77, 79, .10); }
 .field-group.has-field-issue .field-group-title { color: #a8071a; background: #fff1f0; border-bottom-color: #ffccc7; }
-.field-group.has-field-issue .field-group-title::after { content: '需重点核对'; margin-left: auto; padding: 2px 7px; border-radius: 4px; color: #cf1322; background: #fff; font-size: 11px; font-weight: 600; }
 
 .field-group-title {
   display: flex;
@@ -1571,6 +1579,22 @@ button.mini-result {
 .field-group-title.green {
   color: #166534;
   background: #edf9f3;
+}
+
+.group-issue-note {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  padding: 2px 7px;
+  border: 1px solid #ffccc7;
+  border-radius: 4px;
+  color: #cf1322;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
 }
 
 .paired-field-table {
@@ -1609,10 +1633,40 @@ button.mini-result {
   background: #eaf8fc;
 }
 
+.field-row.has-field-issue {
+  position: relative;
+  background: #fff8f7;
+  box-shadow: inset 3px 0 0 #ff7875;
+}
+
+.field-row.has-field-issue .ant-input,
+.field-row.has-field-issue .ant-select-selector {
+  border-color: #ff7875 !important;
+  background: #fff !important;
+}
+
 .field-issue {
-  color: #f77113;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 3px;
+  color: #94a3b8;
   font-size: 12px;
   line-height: 18px;
+}
+
+.field-issue.visible {
+  color: #cf1322;
+  font-weight: 600;
+}
+
+.paired-form-pane.has-whole-pair-risk {
+  box-shadow: inset 0 0 0 2px #ff7875;
+}
+
+.paired-form-pane.has-whole-pair-risk .form-head {
+  border-bottom-color: #ffccc7;
+  background: #fff1f0;
 }
 
 .sticky-actions {

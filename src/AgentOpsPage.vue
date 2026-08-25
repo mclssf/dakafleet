@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from 'vue';
 import {
   BookOutlined,
+  BankOutlined,
   CheckCircleOutlined,
   CloseOutlined,
   CloudUploadOutlined,
@@ -20,7 +21,7 @@ import { correctionMemories, removeCorrectionMemory } from './dictMemory';
 
 type EmployeeKind = 'TMS' | '微信群';
 type LoginType = '短信验证码' | '手机扫码' | '图形验证码' | '无验证';
-type ConfigTab = 'employees' | 'wechatGroups' | 'dictionary';
+type ConfigTab = 'enterpriseProjects' | 'employees' | 'wechatGroups' | 'dictionary';
 
 // 企业字典：别名字典把已知写法映射到标准值；纠错集按企业+项目录入客户历史真实值做模糊纠错
 type DictTab = 'alias' | 'correction';
@@ -123,6 +124,21 @@ interface TenantProject {
   name: string;
 }
 
+type ManagedEnterprise = TenantEnterprise & {
+  cid: string;
+  status: '已启用' | '已停用';
+  createdAt: string;
+};
+
+type ManagedProject = TenantProject & {
+  code: string;
+  customer: string;
+  owner: string;
+  status: '已启用' | '已停用';
+  tmsSync: boolean;
+  updatedAt: string;
+};
+
 const loginTypes: LoginType[] = ['无验证', '图形验证码', '短信验证码', '手机扫码'];
 const activeTab = ref<ConfigTab>('employees');
 const isEmployeeModalOpen = ref(false);
@@ -171,6 +187,54 @@ const tenantProjects: TenantProject[] = [
   { id: 'p-dianzhong-powder', enterpriseId: 'dianzhong-material', name: '滇中新能源矿粉转运项目' },
   { id: 'p-baise-bauxite', enterpriseId: 'baise-mining', name: '百色铝土矿短倒项目' }
 ];
+
+const managedEnterprises = ref<ManagedEnterprise[]>(
+  tenantEnterprises.map((enterprise, index) => ({
+    ...enterprise,
+    cid: `e3db6163-6b5b-4ad3-a10f-${String(798215012150 + index).slice(-12)}`,
+    status: '已启用',
+    createdAt: `2026-08-${String(11 - Math.min(index, 7)).padStart(2, '0')} 19:0${index}`
+  }))
+);
+
+const managedProjects = ref<ManagedProject[]>(
+  tenantProjects.map((project, index) => ({
+    ...project,
+    code: `PJ178644${String(6183901 + index * 27766).padStart(7, '0')}`,
+    customer: '客户',
+    owner: ['李四', '张三', '王五', '赵六'][index % 4],
+    status: '已启用',
+    tmsSync: index < 3,
+    updatedAt: `2026-08-${String(11 - Math.min(index, 7)).padStart(2, '0')}T19:${String(34 - index).padStart(2, '0')}:45`
+  }))
+);
+
+const enterpriseKeyword = ref('');
+const enterpriseStatusFilter = ref<'全部状态' | ManagedEnterprise['status']>('全部状态');
+const projectKeyword = ref('');
+const projectStatusFilter = ref<'全部状态' | ManagedProject['status']>('全部状态');
+const selectedManagedEnterpriseId = ref(managedEnterprises.value[0]?.id ?? '');
+const enterpriseModalOpen = ref(false);
+const projectModalOpen = ref(false);
+const enterpriseFormMode = ref<'create' | 'edit'>('create');
+const projectFormMode = ref<'create' | 'edit'>('create');
+const editingManagedEnterpriseId = ref('');
+const editingManagedProjectId = ref('');
+const enterpriseForm = reactive({
+  name: '',
+  shortName: '',
+  cid: '',
+  status: '已启用' as ManagedEnterprise['status']
+});
+const projectForm = reactive({
+  enterpriseId: '',
+  name: '',
+  code: '',
+  customer: '',
+  owner: '',
+  status: '已启用' as ManagedProject['status'],
+  tmsSync: false
+});
 
 const wechatGroups = ref<WechatGroup[]>([
   {
@@ -597,6 +661,25 @@ const dataEmployees = ref<DataEmployee[]>([
 ]);
 
 const selectedEmployee = computed(() => dataEmployees.value.find((employee) => employee.id === selectedEmployeeId.value) ?? dataEmployees.value[0]);
+const selectedManagedEnterprise = computed(() => managedEnterprises.value.find((enterprise) => enterprise.id === selectedManagedEnterpriseId.value) ?? managedEnterprises.value[0]);
+const filteredManagedEnterprises = computed(() => {
+  const keyword = enterpriseKeyword.value.trim();
+  return managedEnterprises.value.filter((enterprise) => {
+    const matchesKeyword = !keyword || [enterprise.name, enterprise.shortName, enterprise.cid].some((value) => value.includes(keyword));
+    const matchesStatus = enterpriseStatusFilter.value === '全部状态' || enterprise.status === enterpriseStatusFilter.value;
+    return matchesKeyword && matchesStatus;
+  });
+});
+const filteredManagedProjects = computed(() => {
+  const keyword = projectKeyword.value.trim();
+  return managedProjects.value.filter((project) => {
+    if (project.enterpriseId !== selectedManagedEnterprise.value?.id) return false;
+    const matchesKeyword = !keyword || [project.name, project.code, project.customer, project.owner].some((value) => value.includes(keyword));
+    const matchesStatus = projectStatusFilter.value === '全部状态' || project.status === projectStatusFilter.value;
+    return matchesKeyword && matchesStatus;
+  });
+});
+const selectedEnterpriseProjectCount = computed(() => managedProjects.value.filter((project) => project.enterpriseId === selectedManagedEnterprise.value?.id).length);
 const isEditingEmployee = computed(() => editingEmployeeId.value.length > 0);
 const employeeFormTitle = computed(() => `${isEditingEmployee.value ? '编辑' : '增加'}数据员工（${employeeForm.kind}）`);
 const employeeFormConfirmText = computed(() => (isEditingEmployee.value ? '保存' : '确认增加'));
@@ -617,6 +700,7 @@ const formGroupSearchResults = computed(() => {
 });
 
 const opsMenuItems: Array<{ desc: string; icon: unknown; id: ConfigTab; label: string }> = [
+  { id: 'enterpriseProjects', label: '企业与项目', desc: '企业信息与项目归属管理', icon: BankOutlined },
   { id: 'employees', label: '数据员工配置', desc: '微信群、Skill 与验证', icon: TeamOutlined },
   { id: 'wechatGroups', label: '微信群列表', desc: '底层可接入的运营微信群', icon: MessageOutlined },
   { id: 'dictionary', label: '企业字典', desc: '别名映射与历史值纠错集', icon: BookOutlined }
@@ -957,6 +1041,127 @@ function discardMemory(memory: (typeof correctionMemories.value)[number]) {
 
 
 
+
+function enterpriseStatusColor(status: ManagedEnterprise['status']) {
+  return status === '已启用' ? 'green' : 'default';
+}
+
+function projectStatusColor(status: ManagedProject['status']) {
+  return status === '已启用' ? 'green' : 'default';
+}
+
+function toggleTmsSync(project: ManagedProject, checked: boolean) {
+  project.tmsSync = checked;
+  message.success(`${project.name} 已${checked ? '开启' : '关闭'} TMS 同步`);
+}
+
+function selectManagedEnterprise(enterpriseId: string) {
+  selectedManagedEnterpriseId.value = enterpriseId;
+  projectKeyword.value = '';
+  projectStatusFilter.value = '全部状态';
+}
+
+function initials(value: string) {
+  return value.slice(0, 1);
+}
+
+function defaultManagedCid() {
+  return `CID-${String(managedEnterprises.value.length + 1).padStart(4, '0')}`;
+}
+
+function defaultManagedProjectCode() {
+  return `PJ${Date.now().toString().slice(-10)}`;
+}
+
+function openCreateEnterprise() {
+  enterpriseFormMode.value = 'create';
+  editingManagedEnterpriseId.value = '';
+  Object.assign(enterpriseForm, {
+    name: '',
+    shortName: '',
+    cid: defaultManagedCid(),
+    status: '已启用'
+  });
+  enterpriseModalOpen.value = true;
+}
+
+function openEditEnterprise(enterprise: ManagedEnterprise) {
+  enterpriseFormMode.value = 'edit';
+  editingManagedEnterpriseId.value = enterprise.id;
+  Object.assign(enterpriseForm, enterprise);
+  enterpriseModalOpen.value = true;
+}
+
+function saveEnterprise() {
+  const name = enterpriseForm.name.trim();
+  if (!name) {
+    message.warning('请输入企业名称');
+    return;
+  }
+  const shortName = enterpriseForm.shortName.trim() || name.slice(0, 6);
+  const cid = enterpriseForm.cid.trim() || defaultManagedCid();
+  if (enterpriseFormMode.value === 'edit') {
+    const target = managedEnterprises.value.find((enterprise) => enterprise.id === editingManagedEnterpriseId.value);
+    if (target) Object.assign(target, { name, shortName, cid, status: enterpriseForm.status });
+    message.success('企业信息已保存');
+  } else {
+    const id = `enterprise-${Date.now()}`;
+    managedEnterprises.value.unshift({ id, name, shortName, cid, status: enterpriseForm.status, createdAt: '刚刚' });
+    selectedManagedEnterpriseId.value = id;
+    message.success('企业已新增');
+  }
+  enterpriseModalOpen.value = false;
+}
+
+function openCreateProject() {
+  if (!selectedManagedEnterprise.value) return;
+  projectFormMode.value = 'create';
+  editingManagedProjectId.value = '';
+  Object.assign(projectForm, {
+    enterpriseId: selectedManagedEnterprise.value.id,
+    name: '',
+    code: defaultManagedProjectCode(),
+    customer: '',
+    owner: '',
+    status: '已启用',
+    tmsSync: false
+  });
+  projectModalOpen.value = true;
+}
+
+function openEditProject(project: ManagedProject) {
+  projectFormMode.value = 'edit';
+  editingManagedProjectId.value = project.id;
+  Object.assign(projectForm, project);
+  projectModalOpen.value = true;
+}
+
+function saveProject() {
+  const name = projectForm.name.trim();
+  if (!name || !projectForm.enterpriseId) {
+    message.warning('请选择企业并输入项目名称');
+    return;
+  }
+  const payload = {
+    enterpriseId: projectForm.enterpriseId,
+    name,
+    code: projectForm.code.trim() || defaultManagedProjectCode(),
+    customer: projectForm.customer.trim() || '-',
+    owner: projectForm.owner.trim() || '-',
+    status: projectForm.status,
+    tmsSync: projectForm.tmsSync,
+    updatedAt: '刚刚'
+  };
+  if (projectFormMode.value === 'edit') {
+    const target = managedProjects.value.find((project) => project.id === editingManagedProjectId.value);
+    if (target) Object.assign(target, payload);
+    message.success('项目信息已保存');
+  } else {
+    managedProjects.value.unshift({ id: `project-${Date.now()}`, ...payload });
+    message.success('项目已新增');
+  }
+  projectModalOpen.value = false;
+}
 
 function groupById(groupId: string) {
   return wechatGroups.value.find((group) => group.id === groupId);
@@ -1448,7 +1653,128 @@ function validateEmployee() {
       </aside>
 
       <section class="agentops-page">
-        <template v-if="activeTab === 'employees'">
+        <template v-if="activeTab === 'enterpriseProjects'">
+          <section class="enterprise-project-page">
+            <div class="enterprise-project-intro">
+              <div>
+                <h2>企业与项目</h2>
+                <p>统一维护客户企业、企业 CID 和企业下的运输项目。</p>
+              </div>
+              <a-button type="primary" @click="openCreateEnterprise">
+                <template #icon><BankOutlined /></template>
+                新增企业
+              </a-button>
+            </div>
+
+            <div class="enterprise-project-layout">
+              <section class="ops-panel enterprise-list-panel">
+                <div class="ops-panel-head compact">
+                  <div>
+                    <h2>企业列表</h2>
+                    <p>共 {{ filteredManagedEnterprises.length }} 家</p>
+                  </div>
+                </div>
+                <div class="enterprise-filter-bar">
+                  <a-input v-model:value="enterpriseKeyword" allow-clear placeholder="搜索企业或 CID" />
+                  <a-select v-model:value="enterpriseStatusFilter">
+                    <a-select-option value="全部状态">全部状态</a-select-option>
+                    <a-select-option value="已启用">已启用</a-select-option>
+                    <a-select-option value="已停用">已停用</a-select-option>
+                  </a-select>
+                </div>
+                <div class="enterprise-list">
+                  <button
+                    v-for="enterprise in filteredManagedEnterprises"
+                    :key="enterprise.id"
+                    type="button"
+                    :class="{ active: selectedManagedEnterprise?.id === enterprise.id }"
+                    @click="selectManagedEnterprise(enterprise.id)"
+                  >
+                    <span class="enterprise-avatar">{{ initials(enterprise.shortName) }}</span>
+                    <span class="enterprise-list-main">
+                      <strong>{{ enterprise.name }}</strong>
+                      <em>{{ enterprise.shortName }} · CID {{ enterprise.cid }}</em>
+                    </span>
+                    <a-tag :color="enterpriseStatusColor(enterprise.status)">{{ enterprise.status }}</a-tag>
+                  </button>
+                  <div v-if="!filteredManagedEnterprises.length" class="enterprise-empty">暂无匹配企业</div>
+                </div>
+              </section>
+
+              <section class="ops-panel project-list-panel">
+                <div class="ops-panel-head">
+                  <div>
+                    <h2>{{ selectedManagedEnterprise?.name ?? '请选择企业' }}</h2>
+                    <p>CID {{ selectedManagedEnterprise?.cid ?? '-' }} · 共 {{ selectedEnterpriseProjectCount }} 个项目</p>
+                  </div>
+                  <div class="ops-actions">
+                    <a-button :disabled="!selectedManagedEnterprise" @click="selectedManagedEnterprise && openEditEnterprise(selectedManagedEnterprise)">
+                      <template #icon><EditOutlined /></template>
+                      编辑企业
+                    </a-button>
+                    <a-button type="primary" :disabled="!selectedManagedEnterprise" @click="openCreateProject">
+                      <template #icon><PlusOutlined /></template>
+                      新增项目
+                    </a-button>
+                  </div>
+                </div>
+                <div class="project-filter-bar">
+                  <a-input v-model:value="projectKeyword" allow-clear placeholder="搜索项目名称、编码或负责人" />
+                  <a-select v-model:value="projectStatusFilter">
+                    <a-select-option value="全部状态">全部状态</a-select-option>
+                    <a-select-option value="已启用">已启用</a-select-option>
+                    <a-select-option value="已停用">已停用</a-select-option>
+                  </a-select>
+                </div>
+                <div class="enterprise-project-table-wrap">
+                  <table class="ops-table enterprise-project-table">
+                    <thead>
+                      <tr>
+                        <th>项目名称</th>
+                        <th>项目编码</th>
+                        <th>业务客户</th>
+                        <th>运营负责人</th>
+                        <th>状态</th>
+                        <th>TMS同步</th>
+                        <th>更新时间</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="project in filteredManagedProjects" :key="project.id">
+                        <td><strong>{{ project.name }}</strong></td>
+                        <td>{{ project.code }}</td>
+                        <td>{{ project.customer }}</td>
+                        <td>{{ project.owner }}</td>
+                        <td><a-tag :color="projectStatusColor(project.status)">{{ project.status }}</a-tag></td>
+                        <td>
+                          <a-switch
+                            :checked="project.tmsSync"
+                            checked-children="是"
+                            un-checked-children="否"
+                            @change="toggleTmsSync(project, $event)"
+                          />
+                        </td>
+                        <td>{{ project.updatedAt }}</td>
+                        <td>
+                          <a-button type="link" size="small" @click="openEditProject(project)">
+                            <template #icon><EditOutlined /></template>
+                            编辑
+                          </a-button>
+                        </td>
+                      </tr>
+                      <tr v-if="!filteredManagedProjects.length">
+                        <td colspan="8" class="enterprise-empty">当前企业暂无匹配项目</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+          </section>
+        </template>
+
+        <template v-else-if="activeTab === 'employees'">
     <section class="agentops-workspace">
       <div class="ops-panel employee-panel">
         <div class="ops-panel-head">
@@ -1796,6 +2122,66 @@ function validateEmployee() {
         </template>
       </section>
     </main>
+
+    <a-modal v-model:open="enterpriseModalOpen" :title="enterpriseFormMode === 'edit' ? '编辑企业' : '新增企业'" width="560px" ok-text="保存" cancel-text="取消" @ok="saveEnterprise">
+      <div class="enterprise-form-grid">
+        <label>
+          <span>企业名称</span>
+          <a-input v-model:value="enterpriseForm.name" placeholder="请输入企业全称" />
+        </label>
+        <label>
+          <span>企业简称</span>
+          <a-input v-model:value="enterpriseForm.shortName" placeholder="例如：西南干线物流" />
+        </label>
+        <label class="wide">
+          <span>企业 CID</span>
+          <a-input v-model:value="enterpriseForm.cid" placeholder="请输入企业 CID" />
+        </label>
+        <label>
+          <span>状态</span>
+          <a-select v-model:value="enterpriseForm.status">
+            <a-select-option value="已启用">已启用</a-select-option>
+            <a-select-option value="已停用">已停用</a-select-option>
+          </a-select>
+        </label>
+      </div>
+    </a-modal>
+
+    <a-modal v-model:open="projectModalOpen" :title="projectFormMode === 'edit' ? '编辑项目' : '新增项目'" width="620px" ok-text="保存" cancel-text="取消" @ok="saveProject">
+      <div class="enterprise-form-grid">
+        <label class="wide">
+          <span>所属企业</span>
+          <a-select v-model:value="projectForm.enterpriseId" show-search option-filter-prop="label">
+            <a-select-option v-for="enterprise in managedEnterprises" :key="enterprise.id" :value="enterprise.id" :label="enterprise.name">
+              {{ enterprise.name }}
+            </a-select-option>
+          </a-select>
+        </label>
+        <label>
+          <span>项目名称</span>
+          <a-input v-model:value="projectForm.name" placeholder="请输入项目名称" />
+        </label>
+        <label>
+          <span>项目编码</span>
+          <a-input v-model:value="projectForm.code" placeholder="请输入项目编码" />
+        </label>
+        <label>
+          <span>业务客户</span>
+          <a-input v-model:value="projectForm.customer" placeholder="请输入业务客户" />
+        </label>
+        <label>
+          <span>运营负责人</span>
+          <a-input v-model:value="projectForm.owner" placeholder="请输入负责人" />
+        </label>
+        <label>
+          <span>状态</span>
+          <a-select v-model:value="projectForm.status">
+            <a-select-option value="已启用">已启用</a-select-option>
+            <a-select-option value="已停用">已停用</a-select-option>
+          </a-select>
+        </label>
+      </div>
+    </a-modal>
 
     <a-modal v-model:open="isEmployeeModalOpen" :title="employeeFormTitle" width="720px" ok-text="保存" cancel-text="取消" @ok="confirmEmployee" @cancel="closeEmployeeModal">
       <div class="employee-form">
@@ -2409,6 +2795,240 @@ function validateEmployee() {
   min-height: 0;
   overflow: hidden;
   padding-right: 4px;
+}
+
+.enterprise-project-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.enterprise-project-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid #d6dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.enterprise-project-intro h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 21px;
+  line-height: 29px;
+}
+
+.enterprise-project-intro p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.enterprise-project-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.enterprise-list-panel,
+.project-list-panel {
+  display: grid;
+  min-height: 0;
+}
+
+.enterprise-list-panel {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.project-list-panel {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.enterprise-filter-bar,
+.project-filter-bar {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+.enterprise-filter-bar :deep(.ant-select) {
+  width: 110px;
+}
+
+.project-filter-bar :deep(.ant-input) {
+  max-width: 360px;
+}
+
+.project-filter-bar :deep(.ant-select) {
+  width: 130px;
+}
+
+.enterprise-list,
+.enterprise-project-table-wrap {
+  min-height: 0;
+  overflow: auto;
+}
+
+.enterprise-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+}
+
+.enterprise-list button {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 66px;
+  padding: 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  text-align: left;
+}
+
+.enterprise-list button:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.enterprise-list button.active {
+  border-color: #91caff;
+  background: #eff6ff;
+}
+
+.enterprise-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  background: #1677ff;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.enterprise-list-main {
+  min-width: 0;
+}
+
+.enterprise-list-main strong,
+.enterprise-list-main em {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enterprise-list-main strong {
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.enterprise-list-main em {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 16px;
+}
+
+.enterprise-list :deep(.ant-tag) {
+  margin: 0;
+  font-size: 11px;
+}
+
+.enterprise-project-table {
+  min-width: 900px;
+}
+
+.enterprise-project-table th:nth-child(1) {
+  min-width: 180px;
+}
+
+.enterprise-project-table th:nth-child(2) {
+  min-width: 150px;
+}
+
+.enterprise-project-table th:nth-child(3) {
+  min-width: 120px;
+}
+
+.enterprise-project-table th:nth-child(4) {
+  min-width: 112px;
+}
+
+.enterprise-project-table th:nth-child(5) {
+  min-width: 88px;
+}
+
+.enterprise-project-table th:nth-child(6) {
+  min-width: 94px;
+}
+
+.enterprise-project-table th:nth-child(7) {
+  min-width: 170px;
+}
+
+.enterprise-project-table th:nth-child(8) {
+  min-width: 76px;
+}
+
+.enterprise-project-table td {
+  vertical-align: middle;
+}
+
+.enterprise-project-table td:first-child strong {
+  display: block;
+}
+
+.enterprise-empty {
+  padding: 28px 14px;
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: center;
+}
+
+.enterprise-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.enterprise-form-grid label {
+  min-width: 0;
+}
+
+.enterprise-form-grid label.wide {
+  grid-column: 1 / -1;
+}
+
+.enterprise-form-grid label > span {
+  display: block;
+  margin-bottom: 6px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.enterprise-form-grid :deep(.ant-input),
+.enterprise-form-grid :deep(.ant-select) {
+  width: 100%;
 }
 
 .ops-summary-grid {
