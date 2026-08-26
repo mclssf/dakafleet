@@ -136,6 +136,7 @@ const weighPhotoRecognizing = ref<'loading' | 'unloading' | ''>('');
 const weighPairImageModes = ref<Record<string, 'combined' | 'separate'>>({});
 const activeWeighImageTab = ref<WeighSource>('departure');
 const weighImageMode = computed(() => weighPairImageModes.value[currentWeighPair.value?.id] ?? (currentWeighPair.value?.departure.image === currentWeighPair.value?.arrival.image ? 'combined' : 'separate'));
+const weighSupplementImageMode = ref<'combined' | 'separate'>('separate');
 const weighSupplementForm = reactive({
   loadingDate: '2026-06-30',
   unloadingDate: '2026-06-30',
@@ -2160,6 +2161,7 @@ function onAuditWeighPhoto(source: WeighSource, event: Event) {
 function openWeighEdit(record: PairedWeighRecord) {
   weighFormMode.value = 'edit';
   weighEditId.value = record.id;
+  weighSupplementImageMode.value = record.loadingImage && record.unloadingImage && record.loadingImage === record.unloadingImage ? 'combined' : 'separate';
   Object.assign(weighSupplementForm, record, {
     loadingImage: record.loadingImage || weighRows.value.find((item) => item.id === record.sourceBillId)?.image || '',
     unloadingImage: record.unloadingImage || ''
@@ -2200,6 +2202,7 @@ function saveWeighEdit() {
 function openWeighSupplement() {
   weighFormMode.value = 'create';
   weighEditId.value = '';
+  weighSupplementImageMode.value = 'separate';
   Object.assign(weighSupplementForm, {
     loadingDate: '2026-06-30',
     unloadingDate: '2026-06-30',
@@ -2220,13 +2223,37 @@ function openWeighSupplement() {
   weighSupplementVisible.value = true;
 }
 
+function changeWeighSupplementImageMode(mode: 'combined' | 'separate') {
+  if (weighSupplementImageMode.value === mode) return;
+  if (mode === 'combined') {
+    const image = weighSupplementForm.loadingImage || weighSupplementForm.unloadingImage;
+    weighSupplementImageMode.value = mode;
+    if (image) {
+      weighSupplementForm.loadingImage = image;
+      weighSupplementForm.unloadingImage = image;
+    }
+    message.info('已切换为装卸合并单，上传一张图片即可同步识别装货和卸货信息');
+    return;
+  }
+  weighSupplementImageMode.value = mode;
+  weighSupplementForm.unloadingImage = '';
+  message.info('已切换为装卸分开单，请分别上传装货和卸货磅单');
+}
+
 function onWeighPhoto(source: 'loading' | 'unloading', event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0]; input.value = '';
   if (!file) return;
   if (!file.type.startsWith('image/')) { message.error('请选择 JPG、PNG 或 WEBP 图片'); return; }
   if (file.size > 10 * 1024 * 1024) { message.error('单张照片不能超过 10 MB'); return; }
-  weighSupplementForm[source === 'loading' ? 'loadingImage' : 'unloadingImage'] = URL.createObjectURL(file);
+  const image = URL.createObjectURL(file);
+  if (weighSupplementImageMode.value === 'combined') {
+    weighSupplementForm.loadingImage = image;
+    weighSupplementForm.unloadingImage = image;
+    source = 'loading';
+  } else {
+    weighSupplementForm[source === 'loading' ? 'loadingImage' : 'unloadingImage'] = image;
+  }
   weighPhotoRecognizing.value = source;
   window.setTimeout(() => {
     if (source === 'loading') {
@@ -2235,6 +2262,11 @@ function onWeighPhoto(source: 'loading' | 'unloading', event: Event) {
       weighSupplementForm.goods ||= '煤炭';
       weighSupplementForm.loadingPlace ||= '砚山储配站';
       weighSupplementForm.loadingTonnage ||= 42.68;
+      if (weighSupplementImageMode.value === 'combined') {
+        weighSupplementForm.unloadingDate ||= weighSupplementForm.loadingDate;
+        weighSupplementForm.unloadingPlace ||= '广西德保电厂';
+        weighSupplementForm.unloadingTonnage ||= 42.56;
+      }
     } else {
       weighSupplementForm.unloadingDate ||= weighSupplementForm.loadingDate;
       weighSupplementForm.vehiclePlate ||= '云A6K328';
@@ -2242,7 +2274,7 @@ function onWeighPhoto(source: 'loading' | 'unloading', event: Event) {
       weighSupplementForm.unloadingTonnage ||= 42.56;
     }
     weighPhotoRecognizing.value = '';
-    message.success(`${source === 'loading' ? '装货' : '卸货'}照片识别完成，请核对识别结果`);
+    message.success(`${weighSupplementImageMode.value === 'combined' ? '装卸合并单' : source === 'loading' ? '装货' : '卸货'}照片识别完成，请核对识别结果`);
   }, 650);
 }
 
@@ -4404,37 +4436,110 @@ onBeforeUnmount(() => {
       </aside>
     </div>
 
-    <a-modal v-model:open="weighSupplementVisible" :title="weighFormMode === 'edit' ? '编辑磅单' : '补录磅单'" width="820px" :ok-text="weighFormMode === 'edit' ? '保存修改' : '确认补录'" cancel-text="取消" @ok="saveWeighForm">
-      <div class="weigh-photo-grid">
-        <label class="weigh-photo-upload" :class="{ filled: weighSupplementForm.loadingImage }">
-          <input type="file" accept="image/jpeg,image/png,image/webp" @change="onWeighPhoto('loading', $event)" />
-          <img v-if="weighSupplementForm.loadingImage" :src="weighSupplementForm.loadingImage" alt="装货磅单" />
-          <span v-else><UploadOutlined /><b>上传装货照片</b><small>自动识别日期、车牌、地点、货物和吨位</small></span>
-          <em v-if="weighPhotoRecognizing === 'loading'">识别中...</em><i v-else-if="weighSupplementForm.loadingImage">点击替换装货照片</i>
-        </label>
-        <label class="weigh-photo-upload" :class="{ filled: weighSupplementForm.unloadingImage }">
-          <input type="file" accept="image/jpeg,image/png,image/webp" @change="onWeighPhoto('unloading', $event)" />
-          <img v-if="weighSupplementForm.unloadingImage" :src="weighSupplementForm.unloadingImage" alt="卸货磅单" />
-          <span v-else><UploadOutlined /><b>上传卸货照片</b><small>自动识别日期、车牌、地点和卸货吨位</small></span>
-          <em v-if="weighPhotoRecognizing === 'unloading'">识别中...</em><i v-else-if="weighSupplementForm.unloadingImage">点击替换卸货照片</i>
-        </label>
+    <a-modal v-model:open="weighSupplementVisible" :title="weighFormMode === 'edit' ? '编辑磅单' : '补录磅单'" width="1180px" :footer="null" cancel-text="取消" class="weigh-supplement-modal">
+      <div class="weigh-supplement-review">
+        <div class="review-grid paired-review-grid supplement-review-grid">
+          <div class="document-pane">
+            <div class="source-message-bar"><MessageOutlined /><span>补录磅单照片</span><b>{{ weighSupplementImageMode === 'combined' ? (weighSupplementForm.loadingImage ? '1 张' : '请上传照片') : (weighSupplementForm.loadingImage && weighSupplementForm.unloadingImage ? '2 张' : '请上传照片') }}</b><span class="supplement-source-note">支持 JPG、PNG、WEBP</span></div>
+            <div class="weigh-document-nav">
+              <div class="supplement-document-title">
+                <strong>{{ weighSupplementImageMode === 'combined' ? '装卸合并单' : '装货磅单 + 卸货磅单' }}</strong>
+                <span class="supplement-photo-tip">上传后自动识别并回填右侧字段</span>
+              </div>
+              <a-dropdown trigger="click" placement="bottomRight">
+                <a-button type="text" size="small"><SettingOutlined />图片设置<DownOutlined /></a-button>
+                <template #overlay>
+                  <a-menu>
+                    <a-menu-item key="combined" :disabled="weighSupplementImageMode === 'combined'" @click="changeWeighSupplementImageMode('combined')">设为装卸合并单</a-menu-item>
+                    <a-menu-item key="separate" :disabled="weighSupplementImageMode === 'separate'" @click="changeWeighSupplementImageMode('separate')">设为装卸分开单</a-menu-item>
+                  </a-menu>
+                </template>
+              </a-dropdown>
+            </div>
+            <div class="supplement-photo-stage">
+              <div v-if="weighSupplementImageMode === 'combined'" class="supplement-photo-card combined" :class="{ filled: weighSupplementForm.loadingImage }">
+                <div class="supplement-photo-card-head"><strong>装卸合并单</strong><span>{{ weighSupplementForm.loadingImage ? '已上传' : '待上传' }}</span></div>
+                <label class="supplement-photo-content">
+                  <input type="file" accept="image/jpeg,image/png,image/webp" @change="onWeighPhoto('loading', $event)" />
+                  <img v-if="weighSupplementForm.loadingImage" :src="weighSupplementForm.loadingImage" alt="装卸合并单" />
+                  <span v-else><UploadOutlined /><b>上传装卸合并照片</b><small>一张照片同时识别装货和卸货信息</small></span>
+                  <em v-if="weighPhotoRecognizing === 'loading'">识别中...</em><i v-else-if="weighSupplementForm.loadingImage">点击替换装卸合并照片</i>
+                </label>
+              </div>
+              <template v-else>
+              <div class="supplement-photo-card" :class="{ filled: weighSupplementForm.loadingImage }">
+                <div class="supplement-photo-card-head"><strong>装货磅单</strong><span>{{ weighSupplementForm.loadingImage ? '已上传' : '待上传' }}</span></div>
+                <label class="supplement-photo-content">
+                  <input type="file" accept="image/jpeg,image/png,image/webp" @change="onWeighPhoto('loading', $event)" />
+                  <img v-if="weighSupplementForm.loadingImage" :src="weighSupplementForm.loadingImage" alt="装货磅单" />
+                  <span v-else><UploadOutlined /><b>上传装货照片</b><small>自动识别日期、车牌、地点、货物和吨位</small></span>
+                  <em v-if="weighPhotoRecognizing === 'loading'">识别中...</em><i v-else-if="weighSupplementForm.loadingImage">点击替换装货照片</i>
+                </label>
+              </div>
+              <div class="supplement-photo-card" :class="{ filled: weighSupplementForm.unloadingImage }">
+                <div class="supplement-photo-card-head"><strong>卸货磅单</strong><span>{{ weighSupplementForm.unloadingImage ? '已上传' : '待上传' }}</span></div>
+                <label class="supplement-photo-content">
+                  <input type="file" accept="image/jpeg,image/png,image/webp" @change="onWeighPhoto('unloading', $event)" />
+                  <img v-if="weighSupplementForm.unloadingImage" :src="weighSupplementForm.unloadingImage" alt="卸货磅单" />
+                  <span v-else><UploadOutlined /><b>上传卸货照片</b><small>自动识别日期、车牌、地点和卸货吨位</small></span>
+                  <em v-if="weighPhotoRecognizing === 'unloading'">识别中...</em><i v-else-if="weighSupplementForm.unloadingImage">点击替换卸货照片</i>
+                </label>
+              </div>
+              </template>
+            </div>
+            <div class="weigh-bottom-toolbar supplement-photo-toolbar"><span>{{ weighSupplementImageMode === 'combined' ? '合并单识别结果会同步回填装货和卸货字段' : '照片识别结果会自动填入右侧，请核对后保存' }}</span></div>
+          </div>
+
+          <div class="form-pane paired-form-pane supplement-form-pane">
+            <div class="form-head">
+              <div>
+                <strong>识别结果</strong>
+                <span>可直接修改识别结果，补录后将纳入当前项目磅单数据</span>
+              </div>
+              <a-tag color="cyan">{{ weighFormMode === 'edit' ? '编辑中' : '待补录' }}</a-tag>
+            </div>
+            <div class="pair-kpi-grid supplement-kpi-grid">
+              <div><span>装货净重</span><strong>{{ ton(Number(weighSupplementForm.loadingTonnage) || 0) }}</strong></div>
+              <div><span>到货净重</span><strong>{{ ton(Number(weighSupplementForm.unloadingTonnage) || 0) }}</strong></div>
+              <div><span>净重差</span><strong>{{ ton(Math.abs((Number(weighSupplementForm.loadingTonnage) || 0) - (Number(weighSupplementForm.unloadingTonnage) || 0))) }}</strong></div>
+            </div>
+            <div class="paired-field-groups supplement-field-groups">
+              <div class="field-group">
+                <div class="field-group-title"><strong>公共信息</strong></div>
+                <div class="field-table compact paired-field-table">
+                  <div class="field-row"><span>单号</span><a-input v-model:value="weighSupplementForm.orderNo" placeholder="留空自动生成" /><span class="field-issue">-</span></div>
+                  <div class="field-row"><span>客户</span><a-input v-model:value="weighSupplementForm.customer" /><span class="field-issue">-</span></div>
+                  <div class="field-row"><span>车牌号 *</span><a-input v-model:value="weighSupplementForm.vehiclePlate" /><span class="field-issue">-</span></div>
+                  <div class="field-row"><span>驾驶员</span><a-input v-model:value="weighSupplementForm.driver" /><span class="field-issue">-</span></div>
+                  <div class="field-row"><span>货物名称</span><a-input v-model:value="weighSupplementForm.goods" /><span class="field-issue">-</span></div>
+                </div>
+              </div>
+              <div class="field-group">
+                <div class="field-group-title blue"><strong>装货磅单</strong></div>
+                <div class="field-table compact paired-field-table">
+                  <div class="field-row"><span>装货日期</span><a-input v-model:value="weighSupplementForm.loadingDate" /><span class="field-issue">-</span></div>
+                  <div class="field-row"><span>装货地点</span><a-input v-model:value="weighSupplementForm.loadingPlace" /><span class="field-issue">-</span></div>
+                  <div class="field-row"><span>装货吨位</span><a-input-number v-model:value="weighSupplementForm.loadingTonnage" :min="0" :precision="2" style="width:100%" /><span class="field-issue">-</span></div>
+                  <div class="field-row"><span>装车里程</span><a-input-number v-model:value="weighSupplementForm.loadingMileage" :min="0" :precision="0" addon-after="km" style="width:100%" /><span class="field-issue">-</span></div>
+                </div>
+              </div>
+              <div class="field-group">
+                <div class="field-group-title green"><strong>卸货磅单</strong></div>
+                <div class="field-table compact paired-field-table">
+                  <div class="field-row"><span>卸货日期</span><a-input v-model:value="weighSupplementForm.unloadingDate" /><span class="field-issue">-</span></div>
+                  <div class="field-row"><span>卸货地点</span><a-input v-model:value="weighSupplementForm.unloadingPlace" /><span class="field-issue">-</span></div>
+                  <div class="field-row"><span>卸货吨位 *</span><a-input-number v-model:value="weighSupplementForm.unloadingTonnage" :min="0" :precision="2" style="width:100%" /><span class="field-issue">-</span></div>
+                  <div class="field-row"><span>卸车里程</span><a-input-number v-model:value="weighSupplementForm.unloadingMileage" :min="0" :precision="0" addon-after="km" style="width:100%" /><span class="field-issue">-</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="sticky-actions supplement-sticky-actions">
+          <a-button @click="weighSupplementVisible = false">取消</a-button>
+          <a-button type="primary" @click="saveWeighForm">{{ weighFormMode === 'edit' ? '保存修改' : '确认补录' }}</a-button>
+        </div>
       </div>
-      <div class="weigh-edit-form">
-        <label><span>装货日期</span><a-input v-model:value="weighSupplementForm.loadingDate" /></label>
-        <label><span>卸货日期</span><a-input v-model:value="weighSupplementForm.unloadingDate" /></label>
-        <label><span>单号</span><a-input v-model:value="weighSupplementForm.orderNo" placeholder="留空自动生成" /></label>
-        <label><span>客户</span><a-input v-model:value="weighSupplementForm.customer" /></label>
-        <label><span>车牌*</span><a-input v-model:value="weighSupplementForm.vehiclePlate" /></label>
-        <label><span>司机</span><a-input v-model:value="weighSupplementForm.driver" /></label>
-        <label><span>装货名称</span><a-input v-model:value="weighSupplementForm.goods" /></label>
-        <label><span>装货地点</span><a-input v-model:value="weighSupplementForm.loadingPlace" /></label>
-        <label><span>装货吨位</span><a-input-number v-model:value="weighSupplementForm.loadingTonnage" :min="0" :precision="2" style="width:100%" /></label>
-        <label><span>装车里程</span><a-input-number v-model:value="weighSupplementForm.loadingMileage" :min="0" :precision="0" addon-after="km" style="width:100%" /></label>
-        <label><span>卸货地点</span><a-input v-model:value="weighSupplementForm.unloadingPlace" /></label>
-        <label><span>卸货吨位*</span><a-input-number v-model:value="weighSupplementForm.unloadingTonnage" :min="0" :precision="2" style="width:100%" /></label>
-        <label><span>卸车里程</span><a-input-number v-model:value="weighSupplementForm.unloadingMileage" :min="0" :precision="0" addon-after="km" style="width:100%" /></label>
-      </div>
-      <p class="weigh-edit-tip">照片识别结果会自动填入下方字段，请核对后保存。系统按当前项目「装货地点 → 卸货地点」线路单价计算含税产值、税点与利润。</p>
     </a-modal>
 
   </a-config-provider>
