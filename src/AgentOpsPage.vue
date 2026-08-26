@@ -127,6 +127,7 @@ interface TenantProject {
 type ManagedEnterprise = TenantEnterprise & {
   cid: string;
   status: '已启用' | '已停用';
+  tmsSync: boolean;
   createdAt: string;
 };
 
@@ -135,7 +136,6 @@ type ManagedProject = TenantProject & {
   customer: string;
   owner: string;
   status: '已启用' | '已停用';
-  tmsSync: boolean;
   updatedAt: string;
 };
 
@@ -193,6 +193,7 @@ const managedEnterprises = ref<ManagedEnterprise[]>(
     ...enterprise,
     cid: `e3db6163-6b5b-4ad3-a10f-${String(798215012150 + index).slice(-12)}`,
     status: '已启用',
+    tmsSync: index < 3,
     createdAt: `2026-08-${String(11 - Math.min(index, 7)).padStart(2, '0')} 19:0${index}`
   }))
 );
@@ -204,7 +205,6 @@ const managedProjects = ref<ManagedProject[]>(
     customer: '客户',
     owner: ['李四', '张三', '王五', '赵六'][index % 4],
     status: '已启用',
-    tmsSync: index < 3,
     updatedAt: `2026-08-${String(11 - Math.min(index, 7)).padStart(2, '0')}T19:${String(34 - index).padStart(2, '0')}:45`
   }))
 );
@@ -224,7 +224,8 @@ const enterpriseForm = reactive({
   name: '',
   shortName: '',
   cid: '',
-  status: '已启用' as ManagedEnterprise['status']
+  status: '已启用' as ManagedEnterprise['status'],
+  tmsSync: false
 });
 const projectForm = reactive({
   enterpriseId: '',
@@ -232,8 +233,7 @@ const projectForm = reactive({
   code: '',
   customer: '',
   owner: '',
-  status: '已启用' as ManagedProject['status'],
-  tmsSync: false
+  status: '已启用' as ManagedProject['status']
 });
 
 const wechatGroups = ref<WechatGroup[]>([
@@ -1050,9 +1050,9 @@ function projectStatusColor(status: ManagedProject['status']) {
   return status === '已启用' ? 'green' : 'default';
 }
 
-function toggleTmsSync(project: ManagedProject, checked: boolean) {
-  project.tmsSync = checked;
-  message.success(`${project.name} 已${checked ? '开启' : '关闭'} TMS 同步`);
+function toggleEnterpriseTmsSync(enterprise: ManagedEnterprise, checked: boolean) {
+  enterprise.tmsSync = checked;
+  message.success(`${enterprise.name} 已${checked ? '开启' : '关闭'} TMS 同步`);
 }
 
 function selectManagedEnterprise(enterpriseId: string) {
@@ -1080,7 +1080,8 @@ function openCreateEnterprise() {
     name: '',
     shortName: '',
     cid: defaultManagedCid(),
-    status: '已启用'
+    status: '已启用',
+    tmsSync: false
   });
   enterpriseModalOpen.value = true;
 }
@@ -1102,11 +1103,11 @@ function saveEnterprise() {
   const cid = enterpriseForm.cid.trim() || defaultManagedCid();
   if (enterpriseFormMode.value === 'edit') {
     const target = managedEnterprises.value.find((enterprise) => enterprise.id === editingManagedEnterpriseId.value);
-    if (target) Object.assign(target, { name, shortName, cid, status: enterpriseForm.status });
+    if (target) Object.assign(target, { name, shortName, cid, status: enterpriseForm.status, tmsSync: enterpriseForm.tmsSync });
     message.success('企业信息已保存');
   } else {
     const id = `enterprise-${Date.now()}`;
-    managedEnterprises.value.unshift({ id, name, shortName, cid, status: enterpriseForm.status, createdAt: '刚刚' });
+    managedEnterprises.value.unshift({ id, name, shortName, cid, status: enterpriseForm.status, tmsSync: enterpriseForm.tmsSync, createdAt: '刚刚' });
     selectedManagedEnterpriseId.value = id;
     message.success('企业已新增');
   }
@@ -1123,8 +1124,7 @@ function openCreateProject() {
     code: defaultManagedProjectCode(),
     customer: '',
     owner: '',
-    status: '已启用',
-    tmsSync: false
+    status: '已启用'
   });
   projectModalOpen.value = true;
 }
@@ -1149,7 +1149,6 @@ function saveProject() {
     customer: projectForm.customer.trim() || '-',
     owner: projectForm.owner.trim() || '-',
     status: projectForm.status,
-    tmsSync: projectForm.tmsSync,
     updatedAt: '刚刚'
   };
   if (projectFormMode.value === 'edit') {
@@ -1683,20 +1682,34 @@ function validateEmployee() {
                   </a-select>
                 </div>
                 <div class="enterprise-list">
-                  <button
+                  <div
                     v-for="enterprise in filteredManagedEnterprises"
                     :key="enterprise.id"
-                    type="button"
+                    class="enterprise-list-item"
                     :class="{ active: selectedManagedEnterprise?.id === enterprise.id }"
+                    role="button"
+                    tabindex="0"
                     @click="selectManagedEnterprise(enterprise.id)"
+                    @keydown.enter="selectManagedEnterprise(enterprise.id)"
+                    @keydown.space.prevent="selectManagedEnterprise(enterprise.id)"
                   >
                     <span class="enterprise-avatar">{{ initials(enterprise.shortName) }}</span>
                     <span class="enterprise-list-main">
                       <strong>{{ enterprise.name }}</strong>
                       <em>{{ enterprise.shortName }} · CID {{ enterprise.cid }}</em>
                     </span>
-                    <a-tag :color="enterpriseStatusColor(enterprise.status)">{{ enterprise.status }}</a-tag>
-                  </button>
+                    <span class="enterprise-list-status">
+                      <a-tag :color="enterpriseStatusColor(enterprise.status)">{{ enterprise.status }}</a-tag>
+                      <a-switch
+                        :checked="enterprise.tmsSync"
+                        checked-children="TMS"
+                        un-checked-children="TMS"
+                        size="small"
+                        @click.stop
+                        @change="toggleEnterpriseTmsSync(enterprise, $event)"
+                      />
+                    </span>
+                  </div>
                   <div v-if="!filteredManagedEnterprises.length" class="enterprise-empty">暂无匹配企业</div>
                 </div>
               </section>
@@ -1735,7 +1748,6 @@ function validateEmployee() {
                         <th>业务客户</th>
                         <th>运营负责人</th>
                         <th>状态</th>
-                        <th>TMS同步</th>
                         <th>更新时间</th>
                         <th>操作</th>
                       </tr>
@@ -1747,14 +1759,6 @@ function validateEmployee() {
                         <td>{{ project.customer }}</td>
                         <td>{{ project.owner }}</td>
                         <td><a-tag :color="projectStatusColor(project.status)">{{ project.status }}</a-tag></td>
-                        <td>
-                          <a-switch
-                            :checked="project.tmsSync"
-                            checked-children="是"
-                            un-checked-children="否"
-                            @change="toggleTmsSync(project, $event)"
-                          />
-                        </td>
                         <td>{{ project.updatedAt }}</td>
                         <td>
                           <a-button type="link" size="small" @click="openEditProject(project)">
@@ -1764,7 +1768,7 @@ function validateEmployee() {
                         </td>
                       </tr>
                       <tr v-if="!filteredManagedProjects.length">
-                        <td colspan="8" class="enterprise-empty">当前企业暂无匹配项目</td>
+                        <td colspan="7" class="enterprise-empty">当前企业暂无匹配项目</td>
                       </tr>
                     </tbody>
                   </table>
@@ -2143,6 +2147,10 @@ function validateEmployee() {
             <a-select-option value="已启用">已启用</a-select-option>
             <a-select-option value="已停用">已停用</a-select-option>
           </a-select>
+        </label>
+        <label>
+          <span>TMS 同步</span>
+          <a-switch v-model:checked="enterpriseForm.tmsSync" checked-children="已开启" un-checked-children="未开启" />
         </label>
       </div>
     </a-modal>
@@ -2883,7 +2891,7 @@ function validateEmployee() {
   padding: 10px;
 }
 
-.enterprise-list button {
+.enterprise-list-item {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr) auto;
   align-items: center;
@@ -2899,12 +2907,12 @@ function validateEmployee() {
   text-align: left;
 }
 
-.enterprise-list button:hover {
+.enterprise-list-item:hover {
   border-color: #cbd5e1;
   background: #f8fafc;
 }
 
-.enterprise-list button.active {
+.enterprise-list-item.active {
   border-color: #91caff;
   background: #eff6ff;
 }
@@ -2953,8 +2961,49 @@ function validateEmployee() {
   font-size: 11px;
 }
 
+.enterprise-list-status {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.enterprise-list-status :deep(.ant-tag) {
+  line-height: 20px;
+}
+
+.enterprise-list-status :deep(.ant-switch) {
+  width: 52px;
+  min-width: 52px;
+  height: 22px;
+}
+
+.enterprise-list-status :deep(.ant-switch-small) {
+  width: 48px;
+  min-width: 48px;
+}
+
+.enterprise-list-status :deep(.ant-switch .ant-switch-inner) {
+  font-size: 10px;
+}
+
+@media (max-width: 1100px) {
+  .enterprise-project-layout {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 820px) {
+  .enterprise-project-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .enterprise-list-panel {
+    max-height: 420px;
+  }
+}
+
 .enterprise-project-table {
-  min-width: 900px;
+  min-width: 810px;
 }
 
 .enterprise-project-table th:nth-child(1) {
@@ -2978,14 +3027,10 @@ function validateEmployee() {
 }
 
 .enterprise-project-table th:nth-child(6) {
-  min-width: 94px;
-}
-
-.enterprise-project-table th:nth-child(7) {
   min-width: 170px;
 }
 
-.enterprise-project-table th:nth-child(8) {
+.enterprise-project-table th:nth-child(7) {
   min-width: 76px;
 }
 
