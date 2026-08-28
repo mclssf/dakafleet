@@ -5,6 +5,7 @@ import {
   AuditOutlined,
   CarOutlined,
   CheckOutlined,
+  CloudDownloadOutlined,
   ThunderboltOutlined,
   ToolOutlined,
   UploadOutlined,
@@ -21,6 +22,7 @@ import {
   ProjectOutlined,
   RightOutlined,
   RotateRightOutlined,
+  ReloadOutlined,
   SearchOutlined,
   SettingOutlined,
   TableOutlined,
@@ -34,11 +36,19 @@ import { message, Modal } from 'ant-design-vue';
 import zhCN from 'ant-design-vue/es/locale/zh_CN';
 import AgentOpsPage from './AgentOpsPage.vue';
 import ChargingDetailPage from './ChargingDetailPage.vue';
+import FuelDetailPage from './FuelDetailPage.vue';
 import LoginPage from './LoginPage.vue';
 import MaintenanceDetailPage from './MaintenanceDetailPage.vue';
+import ReceivableManagementPage from './ReceivableManagementPage.vue';
 import TireExpensePage from './TireExpensePage.vue';
+import EtcExpensePage from './EtcExpensePage.vue';
 import TransferTaskListPage from './TransferTaskListPage.vue';
+import TripExpensePage from './TripExpensePage.vue';
+import TripAuditPage from './TripAuditPage.vue';
+import CarSearchPage from './CarSearchPage.vue';
 import TableColumnSettings from './TableColumnSettings.vue';
+import VehicleServicePage from './VehicleServicePage.vue';
+import VehicleMonitorPage from './VehicleMonitorPage.vue';
 import WaybillListPage from './WaybillListPage.vue';
 import {
   expenseImages,
@@ -51,6 +61,7 @@ import {
 } from './data';
 import type { AgentMessage, AuditStatus, Expense, FieldBox, PageKey, Project, WeighBill } from './types';
 import { dimensionForField, recordCorrection } from './dictMemory';
+import { vehicleServiceAlertCount } from './operationsStore';
 import { matchProjectRoute, projectRoutes } from './projectRoutes';
 
 const pageHashMap: Record<PageKey, string> = {
@@ -58,11 +69,19 @@ const pageHashMap: Record<PageKey, string> = {
   weighAudit: '#/weigh-audit',
   weighList: '#/',
   waybillList: '#/waybill-list',
+  vehicleMonitor: '#/vehicle-monitor',
   expenseAudit: '#/expense-audit',
   expenseList: '#/expense-list',
+  tripExpense: '#/trip-expense',
+  tripAudit: '#/trip-audit',
+  carSearch: '#/car-search',
+  receivableManagement: '#/receivable-management',
   chargingDetail: '#/charging-detail',
+  fuelDetail: '#/fuel-detail',
+  vehicleService: '#/vehicle-service',
   maintenanceDetail: '#/maintenance-detail',
   tireExpense: '#/tire-expense',
+  etcExpense: '#/etc-expense',
   dashboard: '#/dashboard',
   vehicleDetail: '#/vehicle-detail',
   projects: '#/projects',
@@ -255,11 +274,19 @@ const pageTitle: Record<PageKey, string> = {
   weighAudit: '磅单审核',
   weighList: '磅单列表',
   waybillList: '运单列表',
+  vehicleMonitor: '车辆大屏监控',
   expenseAudit: '报销审核',
   expenseList: '报销列表 / 付款明细',
+  tripExpense: '出车费用管理',
+  tripAudit: '出车单审核',
+  carSearch: '查车',
+  receivableManagement: '应收管理',
   chargingDetail: '充电明细',
+  fuelDetail: '加油明细',
+  vehicleService: '车务管理',
   maintenanceDetail: '维修费用',
   tireExpense: '轮胎费用',
+  etcExpense: 'ETC 费用',
   dashboard: '公司总车队看板',
   vehicleDetail: '车辆账目明细',
   projects: '项目 / 车队管理',
@@ -277,14 +304,133 @@ const companyNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
 
 const projectNavItems: Array<{ key: PageKey; label: string; icon: unknown }> = [
   { key: 'agent', label: '智能体工作台', icon: MessageOutlined },
+  { key: 'carSearch', label: '查车', icon: CarOutlined },
   { key: 'weighList', label: '磅单列表', icon: TableOutlined },
   { key: 'waybillList', label: '运单列表', icon: CarOutlined },
+  { key: 'vehicleMonitor', label: '车辆大屏监控', icon: DashboardOutlined },
+  { key: 'tripExpense', label: '出车费用管理', icon: FileSearchOutlined },
+  { key: 'tripAudit', label: '出车单审核', icon: AuditOutlined },
+  { key: 'receivableManagement', label: '应收管理', icon: WalletOutlined },
   { key: 'expenseList', label: '付款明细', icon: WalletOutlined },
   { key: 'chargingDetail', label: '充电明细', icon: ThunderboltOutlined },
+  { key: 'fuelDetail', label: '加油明细', icon: AimOutlined },
   { key: 'maintenanceDetail', label: '维修费用', icon: ToolOutlined },
   { key: 'tireExpense', label: '轮胎费用', icon: AimOutlined },
+  { key: 'etcExpense', label: 'ETC 费用', icon: CloudDownloadOutlined },
+  { key: 'vehicleService', label: '车务管理', icon: ToolOutlined },
   { key: 'vehicleDetail', label: '车辆账目明细', icon: CarOutlined }
 ];
+
+type SystemMenuKey =
+  | 'dashboard'
+  | 'projects'
+  | 'importList'
+  | 'agent'
+  | 'weighList'
+  | 'waybillList'
+  | 'vehicleMonitor'
+  | 'tripExpense'
+  | 'tripAudit'
+  | 'carSearch'
+  | 'receivableManagement'
+  | 'expenseList'
+  | 'chargingDetail'
+  | 'fuelDetail'
+  | 'vehicleService'
+  | 'maintenanceDetail'
+  | 'tireExpense'
+  | 'etcExpense'
+  | 'vehicleDetail'
+  | 'projectManage';
+
+type SystemMenuGroup = '公司视角' | '当前项目' | '其他入口';
+
+interface SystemMenuItem {
+  key: SystemMenuKey;
+  label: string;
+  group: SystemMenuGroup;
+}
+
+const systemMenuItems: SystemMenuItem[] = [
+  { key: 'dashboard', label: '总车队看板', group: '公司视角' },
+  { key: 'projects', label: '项目车队', group: '公司视角' },
+  { key: 'importList', label: '导入导出', group: '公司视角' },
+  { key: 'agent', label: '智能体工作台', group: '当前项目' },
+  { key: 'carSearch', label: '查车', group: '当前项目' },
+  { key: 'weighList', label: '磅单列表', group: '当前项目' },
+  { key: 'waybillList', label: '运单列表', group: '当前项目' },
+  { key: 'vehicleMonitor', label: '车辆大屏监控', group: '当前项目' },
+  { key: 'tripExpense', label: '出车费用管理', group: '当前项目' },
+  { key: 'tripAudit', label: '出车单审核', group: '当前项目' },
+  { key: 'receivableManagement', label: '应收管理', group: '当前项目' },
+  { key: 'expenseList', label: '付款明细', group: '当前项目' },
+  { key: 'chargingDetail', label: '充电明细', group: '当前项目' },
+  { key: 'fuelDetail', label: '加油明细', group: '当前项目' },
+  { key: 'maintenanceDetail', label: '维修费用', group: '当前项目' },
+  { key: 'tireExpense', label: '轮胎费用', group: '当前项目' },
+  { key: 'etcExpense', label: 'ETC 费用', group: '当前项目' },
+  { key: 'vehicleService', label: '车务管理', group: '当前项目' },
+  { key: 'vehicleDetail', label: '车辆账目明细', group: '当前项目' },
+  { key: 'projectManage', label: '项目 / 车队管理', group: '其他入口' }
+];
+
+const systemMenuGroups: SystemMenuGroup[] = ['公司视角', '当前项目', '其他入口'];
+const defaultSystemMenuKeys = systemMenuItems.map((item) => item.key);
+const newlyAddedSystemMenuKeys: SystemMenuKey[] = ['vehicleMonitor', 'tripExpense', 'receivableManagement', 'fuelDetail', 'vehicleService', 'etcExpense'];
+const storedSystemMenuKeys = (() => {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem('system-visible-menus') || 'null');
+    return Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+})();
+const visibleSystemMenus = ref<SystemMenuKey[]>(
+  storedSystemMenuKeys
+    ? [
+        ...storedSystemMenuKeys.filter((key): key is SystemMenuKey => defaultSystemMenuKeys.includes(key as SystemMenuKey)),
+        ...newlyAddedSystemMenuKeys.filter((key) => !storedSystemMenuKeys.includes(key))
+      ]
+    : [...defaultSystemMenuKeys]
+);
+const systemMenuConfigVisible = ref(false);
+type ProductVersion = 'bulk' | 'express';
+const productVersion = ref<ProductVersion>((localStorage.getItem('product-version') as ProductVersion) === 'bulk' ? 'bulk' : 'express');
+const bulkMenuKeys: SystemMenuKey[] = ['weighList', 'expenseList', 'chargingDetail', 'fuelDetail', 'maintenanceDetail', 'tireExpense', 'vehicleDetail'];
+const expressMenuKeys: SystemMenuKey[] = ['waybillList', 'vehicleMonitor', 'tripExpense', 'tripAudit', 'receivableManagement', 'expenseList', 'fuelDetail', 'vehicleService', 'vehicleDetail'];
+const publicMenuKeys: SystemMenuKey[] = ['dashboard', 'projects', 'importList', 'agent', 'carSearch'];
+const versionMenuKeys = computed(() => productVersion.value === 'bulk' ? bulkMenuKeys : expressMenuKeys);
+const configurableSystemMenuItems = computed(() => systemMenuItems.filter((item) => publicMenuKeys.includes(item.key as SystemMenuKey) || item.key === 'projectManage' || versionMenuKeys.value.includes(item.key as SystemMenuKey)));
+const visibleCompanyNavItems = computed(() => companyNavItems.filter((item) => publicMenuKeys.includes(item.key as SystemMenuKey) && isSystemMenuVisible(item.key as SystemMenuKey)));
+const visibleProjectNavItems = computed(() => projectNavItems.filter((item) => (publicMenuKeys.includes(item.key as SystemMenuKey) || versionMenuKeys.value.includes(item.key as SystemMenuKey)) && (publicMenuKeys.includes(item.key as SystemMenuKey) || isSystemMenuVisible(item.key as SystemMenuKey))));
+
+watch(
+  visibleSystemMenus,
+  (value) => localStorage.setItem('system-visible-menus', JSON.stringify(value)),
+  { deep: true }
+);
+
+function isSystemMenuVisible(key: SystemMenuKey) {
+  return publicMenuKeys.includes(key) || key === 'projectManage' || (versionMenuKeys.value.includes(key) && visibleSystemMenus.value.includes(key));
+}
+function menuLabel(item: { key: string; label: string }) {
+  if (item.key === 'expenseList') return productVersion.value === 'bulk' ? '付款明细' : '应付管理';
+  if (item.key === 'vehicleDetail' && productVersion.value === 'express') return '车辆费用管理';
+  return item.label;
+}
+
+watch(productVersion, (value) => localStorage.setItem('product-version', value));
+
+function toggleSystemMenu(key: SystemMenuKey) {
+  visibleSystemMenus.value = isSystemMenuVisible(key)
+    ? visibleSystemMenus.value.filter((item) => item !== key)
+    : [...visibleSystemMenus.value, key];
+}
+
+function resetSystemMenus() {
+  visibleSystemMenus.value = [...defaultSystemMenuKeys];
+  message.success('已恢复全部系统菜单');
+}
 
 type ProjectEmployeeKind = 'TMS' | '微信群';
 type ProjectEditorTab = ProjectEmployeeKind | '技能';
@@ -3085,12 +3231,20 @@ onBeforeUnmount(() => {
           activePage === 'dashboard' ||
           activePage === 'weighList' ||
           activePage === 'waybillList' ||
+          activePage === 'vehicleMonitor' ||
+          activePage === 'tripExpense' ||
+          activePage === 'tripAudit' ||
+          activePage === 'carSearch' ||
+          activePage === 'receivableManagement' ||
           activePage === 'vehicleDetail' ||
           activePage === 'weighAudit' ||
           activePage === 'expenseAudit' ||
           activePage === 'chargingDetail' ||
+          activePage === 'fuelDetail' ||
+          activePage === 'vehicleService' ||
           activePage === 'maintenanceDetail' ||
           activePage === 'tireExpense' ||
+          activePage === 'etcExpense' ||
           activePage === 'importList' ||
           activePage === 'exportList' ||
           activePage === 'projectManage' ||
@@ -3107,24 +3261,29 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="side-section company-section">
+        <div v-if="visibleCompanyNavItems.length" class="side-section company-section">
           <div class="side-title">公司视角</div>
           <button
-            v-for="item in companyNavItems"
+            v-for="item in visibleCompanyNavItems"
             :key="item.key"
             class="nav-item"
             :class="{ active: activePage === item.key || (item.key === 'importList' && activePage === 'exportList') }"
             @click="navigate(item.key)"
           >
             <component :is="item.icon" />
-            <span>{{ item.label }}</span>
+            <span>{{ menuLabel(item) }}</span>
           </button>
         </div>
 
         <div class="side-section project-section">
           <div class="side-title side-title-action">
             <span>项目 / 车队</span>
-            <button type="button" :class="{ active: activePage === 'projectManage' }" @click="openProjectManage">
+            <button
+              v-if="isSystemMenuVisible('projectManage')"
+              type="button"
+              :class="{ active: activePage === 'projectManage' }"
+              @click="openProjectManage"
+            >
               <SettingOutlined />
               管理
             </button>
@@ -3153,12 +3312,22 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="side-section nav-section project-menu-drawer" :class="{ expanded: projectMenuExpanded }">
+        <div
+          v-if="visibleProjectNavItems.length"
+          class="side-section nav-section project-menu-drawer"
+          :class="{ expanded: projectMenuExpanded }"
+        >
           <div class="side-title">{{ activePage === 'dashboard' ? '功能导航' : '当前项目操作' }}</div>
           <div class="drawer-inner">
-            <button v-for="item in projectNavItems" :key="item.key" class="nav-item" :class="{ active: activePage === item.key }" @click="navigate(item.key)">
+            <button
+              v-for="item in visibleProjectNavItems"
+              :key="item.key"
+              class="nav-item"
+              :class="{ active: activePage === item.key }"
+              @click="navigate(item.key)"
+            >
               <component :is="item.icon" />
-              <span>{{ item.label }}</span>
+              <span>{{ menuLabel(item) }}</span>
               <a-badge
                 v-if="item.key === 'weighList'"
                 :count="projectPendingWeigh(selectedProjectId)"
@@ -3168,6 +3337,12 @@ onBeforeUnmount(() => {
               <a-badge
                 v-else-if="item.key === 'expenseList'"
                 :count="projectPendingExpense(selectedProjectId)"
+                :number-style="{ backgroundColor: '#F77113' }"
+                class="nav-badge"
+              />
+              <a-badge
+                v-else-if="item.key === 'vehicleService'"
+                :count="vehicleServiceAlertCount"
                 :number-style="{ backgroundColor: '#F77113' }"
                 class="nav-badge"
               />
@@ -3193,6 +3368,48 @@ onBeforeUnmount(() => {
             <h1>{{ pageTitle[activePage] }}</h1>
           </div>
           <div class="topbar-actions">
+            <a-select v-model:value="productVersion" size="small" class="version-switch" aria-label="版本切换">
+              <a-select-option value="bulk">大宗版</a-select-option>
+              <a-select-option value="express">快递快运版</a-select-option>
+            </a-select>
+            <a-popover
+              v-model:open="systemMenuConfigVisible"
+              trigger="click"
+              placement="bottomRight"
+              overlay-class-name="system-menu-config-popover"
+            >
+              <template #title>
+                <div class="system-menu-config-title">
+                  <span>系统菜单配置</span>
+                  <a-button type="link" size="small" @click="resetSystemMenus">
+                    <ReloadOutlined />
+                    恢复全部
+                  </a-button>
+                </div>
+              </template>
+              <template #content>
+                <div class="system-menu-config-content">
+                  <div v-for="group in systemMenuGroups" :key="group" class="system-menu-config-group">
+                    <strong>{{ group }}</strong>
+                    <label v-for="item in configurableSystemMenuItems.filter((menu) => menu.group === group)" :key="item.key">
+                      <span>{{ menuLabel(item) }}</span>
+                      <a-switch
+                        :checked="isSystemMenuVisible(item.key)"
+                        size="small"
+                        @change="toggleSystemMenu(item.key)"
+                      />
+                    </label>
+                  </div>
+                  <p>关闭后对应入口会从系统导航中隐藏，配置会自动保存。</p>
+                </div>
+              </template>
+              <a-button aria-label="配置系统菜单">
+                <template #icon>
+                  <SettingOutlined />
+                </template>
+                菜单配置
+              </a-button>
+            </a-popover>
             <a-button v-if="activePage === 'agent'" @click="agentRightPanelVisible = !agentRightPanelVisible">
               <template #icon>
                 <component :is="agentRightPanelVisible ? LeftOutlined : RightOutlined" />
@@ -3502,6 +3719,16 @@ onBeforeUnmount(() => {
 
         <WaybillListPage v-else-if="activePage === 'waybillList'" :project-id="selectedProjectId" :project-name="currentProject.name" />
 
+        <VehicleMonitorPage v-else-if="activePage === 'vehicleMonitor'" :project-id="selectedProjectId" />
+
+        <TripExpensePage v-else-if="activePage === 'tripExpense'" :project-id="selectedProjectId" @open-audit="navigate('tripAudit')" />
+
+        <TripAuditPage v-else-if="activePage === 'tripAudit'" :project-id="selectedProjectId" @back="navigate('tripExpense')" />
+
+        <CarSearchPage v-else-if="activePage === 'carSearch'" />
+
+        <ReceivableManagementPage v-else-if="activePage === 'receivableManagement'" :project-id="selectedProjectId" />
+
         <section v-else-if="activePage === 'expenseAudit'" class="content review-screen">
           <div class="review-back-bar">
             <a-button @click="navigate('expenseList')"><LeftOutlined />返回付款明细</a-button>
@@ -3767,13 +3994,16 @@ onBeforeUnmount(() => {
         </section>
 
         <ChargingDetailPage v-else-if="activePage === 'chargingDetail'" />
+        <FuelDetailPage v-else-if="activePage === 'fuelDetail'" :project-id="selectedProjectId" />
+        <VehicleServicePage v-else-if="activePage === 'vehicleService'" :project-id="selectedProjectId" />
         <MaintenanceDetailPage v-else-if="activePage === 'maintenanceDetail'" />
         <TireExpensePage v-else-if="activePage === 'tireExpense'" />
+        <EtcExpensePage v-else-if="activePage === 'etcExpense'" />
         <TransferTaskListPage v-else-if="activePage === 'importList'" mode="import" @change-mode="navigate($event === 'import' ? 'importList' : 'exportList')" />
         <TransferTaskListPage v-else-if="activePage === 'exportList'" mode="export" @change-mode="navigate($event === 'import' ? 'importList' : 'exportList')" />
 
         <section v-else-if="activePage === 'dashboard'" class="content dashboard-screen">
-          <div class="metric-grid four">
+          <div v-if="productVersion === 'bulk'" class="metric-grid four">
             <div class="metric-card"><span>总车辆数</span><strong>{{ totalStats.vehicles }}</strong></div>
             <div class="metric-card"><span>运营车辆数</span><strong>{{ totalStats.running }}</strong></div>
             <div class="metric-card"><span>本月总运费</span><strong>{{ money(totalStats.revenue) }}</strong></div>
@@ -3881,8 +4111,19 @@ onBeforeUnmount(() => {
             <div class="metric-card"><span>成本</span><strong>{{ money(currentVehicleFinance.cost) }}</strong></div>
             <div class="metric-card" :class="{ danger: currentVehicleFinance.profit < 0 }"><span>利润</span><strong>{{ money(currentVehicleFinance.profit) }}</strong></div>
           </div>
+          <template v-if="productVersion === 'express'">
+            <div class="metric-grid five vehicle-summary-cards">
+              <div class="metric-card"><span>合计支出</span><strong>{{ money(currentVehicleFinance.cost) }}</strong></div>
+              <div class="metric-card driver-pay"><span>司机应付</span><strong>{{ money(currentVehicleFinance.cost * 0.6) }}</strong></div>
+              <div class="metric-card"><span>企业应付</span><strong>{{ money(currentVehicleFinance.cost * 0.4) }}</strong></div>
+              <div class="metric-card"><span>预付金额</span><strong>{{ money(0) }}</strong></div>
+              <div class="metric-card profit-card"><span>毛利</span><strong>{{ money(currentVehicleFinance.profit) }}</strong></div>
+            </div>
+            <div class="vehicle-summary-note">本周期车辆费用统计：合计支出 = 司机应付 + 企业应付；费用明细支持按出车单追溯与复核。</div>
+            <div class="vehicle-toolbar"><a-range-picker v-model:value="vehicleDateRange" value-format="YYYY-MM-DD" /><a-input placeholder="搜索车牌号、司机、车辆分组" /><a-select placeholder="全部状态" style="width:140px"><a-select-option value="all">全部状态</a-select-option></a-select><span class="toolbar-spacer"></span><a-button type="primary">新建 / 导入车辆费用</a-button></div>
+          </template>
           <div class="vehicle-ledger-grid">
-            <div v-if="vehicleBillsFiltered.length" class="chart-card vehicle-table-card">
+            <div v-if="productVersion === 'bulk' && vehicleBillsFiltered.length" class="chart-card vehicle-table-card">
               <div class="table-card-title"><h3>磅单记录</h3><TableColumnSettings v-model="vehicleBillFieldKeys" :columns="baseVehicleBillColumns" /></div>
               <a-table
                 size="small"
@@ -3905,7 +4146,7 @@ onBeforeUnmount(() => {
                 </template>
               </a-table>
             </div>
-            <div v-if="vehicleWaybillsFiltered.length" class="chart-card vehicle-table-card">
+            <div v-if="productVersion === 'express' && vehicleWaybillsFiltered.length" class="chart-card vehicle-table-card">
               <div class="table-card-title"><h3>运单记录</h3><TableColumnSettings v-model="vehicleWaybillFieldKeys" :columns="baseVehicleWaybillColumns" /></div>
               <a-table size="small" :columns="vehicleWaybillColumns" :data-source="vehicleWaybillsFiltered" :pagination="false" row-key="id" class="dense-table inner-table">
                 <template #bodyCell="{ column, record }"><template v-if="column.dataIndex === 'freight'">{{ money(record.freight) }}</template><template v-else-if="column.dataIndex === 'status'"><a-tag color="green">{{ record.status }}</a-tag></template></template>
@@ -4345,12 +4586,20 @@ onBeforeUnmount(() => {
           activePage !== 'dashboard' &&
           activePage !== 'weighList' &&
           activePage !== 'waybillList' &&
+          activePage !== 'vehicleMonitor' &&
+          activePage !== 'tripExpense' &&
+          activePage !== 'tripAudit' &&
+          activePage !== 'carSearch' &&
+          activePage !== 'receivableManagement' &&
           activePage !== 'vehicleDetail' &&
           activePage !== 'weighAudit' &&
           activePage !== 'expenseAudit' &&
           activePage !== 'chargingDetail' &&
+          activePage !== 'fuelDetail' &&
+          activePage !== 'vehicleService' &&
           activePage !== 'maintenanceDetail' &&
           activePage !== 'tireExpense' &&
+          activePage !== 'etcExpense' &&
           activePage !== 'importList' &&
           activePage !== 'exportList' &&
           activePage !== 'projectManage' &&

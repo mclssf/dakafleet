@@ -103,11 +103,19 @@ export type PageKey =
   | 'weighAudit'
   | 'weighList'
   | 'waybillList'
+  | 'vehicleMonitor'
   | 'expenseAudit'
   | 'expenseList'
+  | 'tripExpense'
+  | 'tripAudit'
+  | 'carSearch'
+  | 'receivableManagement'
   | 'chargingDetail'
+  | 'fuelDetail'
+  | 'vehicleService'
   | 'maintenanceDetail'
   | 'tireExpense'
+  | 'etcExpense'
   | 'dashboard'
   | 'vehicleDetail'
   | 'projects'
@@ -116,7 +124,7 @@ export type PageKey =
   | 'importList'
   | 'exportList';
 
-export type RecordDataSource = 'payment_sync' | 'upstream_import' | 'manual' | 'wechat_robot' | 'table_import' | 'image_ocr';
+export type RecordDataSource = 'payment_sync' | 'upstream_import' | 'upstream_fetch' | 'manual' | 'wechat_robot' | 'table_import' | 'image_ocr';
 
 export interface ChargingRecord {
   id: string;
@@ -202,4 +210,38 @@ export interface TireRecord {
   paymentStatus: '已付' | '未付';
   tireNumberPending: boolean;
   createdAt: string;
+}
+
+// ETC 通行费。上游 ETC 平台（发行方/服务商）按卡出账，一次通行一条流水：
+// 入口站 → 出口站 + 通行时间 + 计费金额，对账时用交易流水号去重。
+export type EtcVehicleType = '一类货车' | '二类货车' | '三类货车' | '四类货车' | '五类货车' | '六类货车';
+
+export interface EtcRecord {
+  id: string;
+  dataSource: RecordDataSource;
+  sourceRefId: string | null;
+  // 上游平台交易流水号，抓取去重的唯一键
+  transactionNo: string | null;
+  date: string;
+  vehiclePlate: string;
+  etcCardNo: string;
+  vehicleType: EtcVehicleType;
+  entryStation: string;
+  exitStation: string;
+  entryTime: string | null;
+  exitTime: string | null;
+  mileage: number | null;
+  // 原始通行费 - 折扣 = 实际扣费
+  originalAmount: number | null;
+  discountAmount: number | null;
+  amount: number;
+  balance: number | null;
+  provider: string;
+  driver: string;
+  remark: string;
+  images: string[];
+  paymentDate: string | null;
+  createdAt: string;
+  // 付款明细同步记录：付款状态跟随付款明细，只读
+  syncedPaid?: boolean;
 }

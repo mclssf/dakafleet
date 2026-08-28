@@ -12,6 +12,7 @@ const DEFAULT_CAPACITY = 430;
 const sourceLabels: Record<RecordDataSource, string> = {
   payment_sync: '自动同步',
   upstream_import: '导入数据',
+  upstream_fetch: '上游抓取',
   manual: '手动添加',
   wechat_robot: '自动同步',
   table_import: '导入数据',
